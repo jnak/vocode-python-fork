@@ -19,7 +19,7 @@ from vocode.streaming.utils import convert_wav
 
 
 class GoogleSynthesizer(BaseSynthesizer):
-    OFFSET_SECONDS = 0.5
+    # OFFSET_SECONDS = 0.5
 
     def __init__(
         self,
@@ -81,14 +81,15 @@ class GoogleSynthesizer(BaseSynthesizer):
         response: self.tts.SynthesizeSpeechResponse = self.synthesize(message.text)
         output_sample_rate = response.audio_config.sample_rate_hertz
 
-        real_offset = int(GoogleSynthesizer.OFFSET_SECONDS * output_sample_rate)
+        # real_offset = int(GoogleSynthesizer.OFFSET_SECONDS * output_sample_rate)  # julien
 
         output_bytes_io = io.BytesIO()
         in_memory_wav = wave.open(output_bytes_io, "wb")
         in_memory_wav.setnchannels(1)
         in_memory_wav.setsampwidth(2)
         in_memory_wav.setframerate(output_sample_rate)
-        in_memory_wav.writeframes(response.audio_content[real_offset:-real_offset])
+        in_memory_wav.writeframes(response.audio_content)
+        # in_memory_wav.writeframes(response.audio_content[real_offset:-real_offset])  # julien
         output_bytes_io.seek(0)
 
         return self.create_synthesis_result_from_wav(
