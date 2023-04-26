@@ -203,6 +203,7 @@ class StreamingConversation:
                         continue
 
                 stop_event = self.enqueue_stop_event()
+                self.logger.debug("Message sent: {}".format(message.text))
                 synthesis_result = self.synthesizer.create_speech(
                     message, chunk_size, bot_sentiment=self.bot_sentiment
                 )
@@ -212,7 +213,7 @@ class StreamingConversation:
                     stop_event,
                     seconds_per_chunk,
                 )
-                self.logger.debug("Message sent: {}".format(message_sent))
+                # self.logger.debug("Message sent: {}".format(message_sent))
                 response_buffer = f"{response_buffer} {message_sent}"
                 if cut_off:
                     speech_cut_off.set()

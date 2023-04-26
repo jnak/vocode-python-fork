@@ -72,6 +72,7 @@ class ChatGPTAgent(BaseAgent):
         self.is_first_response = True
 
     def create_first_response(self, first_prompt):
+        self.logger.debug("LLM First message: %s", first_prompt)
         return self.conversation.predict(input=first_prompt)
 
     async def respond(
@@ -109,6 +110,7 @@ class ChatGPTAgent(BaseAgent):
             self.memory.chat_memory.messages.append(
                 ChatMessage(role="assistant", content=cut_off_response)
             )
+            self.logger.debug("LLM Interupted: %s", cut_off_response)
             yield cut_off_response
             return
         prompt_messages = [
@@ -131,6 +133,7 @@ class ChatGPTAgent(BaseAgent):
             get_text=lambda choice: choice.get("delta", {}).get("content"),
         ):
             bot_memory_message.content = f"{bot_memory_message.content} {message}"
+            self.logger.debug("LLM Sentence: %s", message)
             yield message
 
     def update_last_bot_message_on_cut_off(self, message: str):
