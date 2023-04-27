@@ -155,52 +155,64 @@ class DeepgramTranscriber(BaseTranscriber):
         ) as ws:
 
             async def sender(ws: WebSocketClientProtocol):  # sends audio to websocket
-                while not self._ended:
-                    try:
-                        data = await asyncio.wait_for(self.audio_queue.get(), 5)
-                    except asyncio.exceptions.TimeoutError:
-                        break
-                    await ws.send(data)
-                self.logger.debug("Terminating Deepgram transcriber sender")
+                try:
+                    while not self._ended:
+                        try:
+                            data = await asyncio.wait_for(self.audio_queue.get(), 5)
+                        except asyncio.exceptions.TimeoutError:
+                            break
+                        await ws.send(data)
+                    self.logger.debug("Terminating Deepgram transcriber sender")
+                except Exception as e:
+                    self.logger.exception(
+                        "Deepgram transcriber sender unexpected error"
+                    )
 
             async def receiver(ws: WebSocketClientProtocol):
-                buffer = ""
-                time_silent = 0
-                while not self._ended:
-                    try:
-                        msg = await ws.recv()
-                    except Exception as e:
-                        self.logger.debug(f"Got error {e} in Deepgram receiver")
-                        break
-                    data = json.loads(msg)
-                    if (
-                        not "is_final" in data
-                    ):  # means we've finished receiving transcriptions
-                        break
-                    is_final = data["is_final"]
-                    speech_final = self.is_speech_final(buffer, data, time_silent)
-                    top_choice = data["channel"]["alternatives"][0]
-                    confidence = top_choice["confidence"]
+                try:
+                    buffer = ""
+                    time_silent = 0
+                    while not self._ended:
+                        try:
+                            msg = await ws.recv()
+                        except Exception as e:
+                            self.logger.debug(f"Got error {e} in Deepgram receiver")
+                            break
+                        data = json.loads(msg)
+                        if (
+                            not "is_final" in data
+                        ):  # means we've finished receiving transcriptions
+                            break
+                        is_final = data["is_final"]
+                        speech_final = self.is_speech_final(buffer, data, time_silent)
+                        top_choice = data["channel"]["alternatives"][0]
+                        confidence = top_choice["confidence"]
 
-                    if top_choice["transcript"] and confidence > 0.0 and is_final:
-                        buffer = f"{buffer} {top_choice['transcript']}"
+                        if top_choice["transcript"] and confidence > 0.0 and is_final:
+                            buffer = f"{buffer} {top_choice['transcript']}"
 
-                    if speech_final:
-                        await self.on_response(Transcription(buffer, confidence, True))
-                        buffer = ""
-                        time_silent = 0
-                    elif top_choice["transcript"] and confidence > 0.0:
-                        await self.on_response(
-                            Transcription(
-                                buffer,
-                                confidence,
-                                False,
+                        if speech_final:
+                            await self.on_response(
+                                Transcription(buffer, confidence, True)
                             )
-                        )
-                        time_silent = self.calculate_time_silent(data)
-                    else:
-                        time_silent += data["duration"]
+                            buffer = ""
+                            time_silent = 0
+                        elif top_choice["transcript"] and confidence > 0.0:
+                            await self.on_response(
+                                Transcription(
+                                    buffer,
+                                    confidence,
+                                    False,
+                                )
+                            )
+                            time_silent = self.calculate_time_silent(data)
+                        else:
+                            time_silent += data["duration"]
 
-                self.logger.debug("Terminating Deepgram transcriber receiver")
+                    self.logger.debug("Terminating Deepgram transcriber receiver")
+                except Exception as e:
+                    self.logger.exception(
+                        "Deepgram transcriber sender unexpected error"
+                    )
 
             await asyncio.gather(sender(ws), receiver(ws))
