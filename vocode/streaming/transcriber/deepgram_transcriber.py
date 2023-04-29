@@ -158,8 +158,9 @@ class DeepgramTranscriber(BaseTranscriber):
                 try:
                     while not self._ended:
                         try:
-                            data = await asyncio.wait_for(self.audio_queue.get(), 5)
+                            data = await asyncio.wait_for(self.audio_queue.get(), 1)
                         except asyncio.exceptions.TimeoutError:
+                            self.logger.exception("Deepgram transcriber sender Timeout")
                             break
                         await ws.send(data)
                     self.logger.debug("Terminating Deepgram transcriber sender")

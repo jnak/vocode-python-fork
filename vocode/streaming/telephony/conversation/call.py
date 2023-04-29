@@ -80,6 +80,8 @@ class Call(StreamingConversation):
         self.twilio_sid = twilio_sid
         self.latest_media_timestamp = 0
 
+        self.last_message = None
+
     @staticmethod
     def from_call_config(
         base_url: str,
@@ -148,11 +150,25 @@ class Call(StreamingConversation):
         if message is None:
             return PhoneCallAction.CLOSE_WEBSOCKET
 
+        last_message = self.last_message
         data = json.loads(message)
+        self.last_message = data
+
         if data["event"] == "media":
             media = data["media"]
             chunk = base64.b64decode(media["payload"])
-            if self.latest_media_timestamp + 20 < int(media["timestamp"]):
+            # TODO(julien) WTF is this? I have no clue why that's needed
+            # 1. There needs to check for existence otherwise the first message is always going to go through that
+            if self.latest_media_timestamp and self.latest_media_timestamp + 20 < int(
+                media["timestamp"]
+            ):
+                self.logger.error(
+                    'self.latest_media_timestamp + 20 < int(media["timestamp"])\n'
+                    "current_message: %s \n"
+                    "last_message: %s,",
+                    data,
+                    last_message,
+                )
                 bytes_to_fill = 8 * (
                     int(media["timestamp"]) - (self.latest_media_timestamp + 20)
                 )
@@ -178,7 +194,5 @@ class Call(StreamingConversation):
         self.config_manager.delete_config(self.id)
 
     def tear_down(self):
-        self.events_manager.publish_event(
-            PhoneCallEndedEvent(conversation_id=self.id)
-        )
+        self.events_manager.publish_event(PhoneCallEndedEvent(conversation_id=self.id))
         self.terminate()
