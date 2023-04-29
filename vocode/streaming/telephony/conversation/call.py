@@ -157,9 +157,12 @@ class Call(StreamingConversation):
                     int(media["timestamp"]) - (self.latest_media_timestamp + 20)
                 )
                 self.logger.debug(f"Filling {bytes_to_fill} bytes of silence")
+                # TODO(julien) WTF is this? 
                 # NOTE: 0xff is silence for mulaw audio
                 self.receive_audio(b"\xff" * bytes_to_fill)
             self.latest_media_timestamp = int(media["timestamp"])
+
+            self.logger.debug('Twilio handle_ws_message')
             self.receive_audio(chunk)
         elif data["event"] == "stop":
             self.logger.debug(f"Media WS: Received event 'stop': {message}")
