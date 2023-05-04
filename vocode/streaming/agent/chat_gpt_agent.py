@@ -81,6 +81,7 @@ class ChatGPTAgent(BaseAgent):
         is_interrupt: bool = False,
         conversation_id: Optional[str] = None,
     ) -> Tuple[str, bool]:
+        # TODO(julien) This does not happen when a message
         if is_interrupt and self.agent_config.cut_off_response:
             cut_off_response = self.get_cut_off_response()
             self.memory.chat_memory.add_user_message(human_input)
@@ -105,6 +106,7 @@ class ChatGPTAgent(BaseAgent):
         self.memory.chat_memory.messages.append(
             ChatMessage(role="user", content=human_input)
         )
+        # TODO(julien) This probably does not happen because transcriptions are discarded if they are not final
         if is_interrupt and self.agent_config.cut_off_response:
             cut_off_response = self.get_cut_off_response()
             self.memory.chat_memory.messages.append(
@@ -137,6 +139,9 @@ class ChatGPTAgent(BaseAgent):
             yield message
 
     def update_last_bot_message_on_cut_off(self, message: str):
+        """Get the last message from the agent and delete"""
+        # TODO(julien) It would probably make more sense to add messages only once they've been played back
+        # There is no use for having in the history until then
         for memory_message in self.memory.chat_memory.messages[::-1]:
             if (
                 isinstance(memory_message, ChatMessage)
