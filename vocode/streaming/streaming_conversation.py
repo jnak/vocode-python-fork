@@ -188,6 +188,10 @@ class StreamingConversation:
             * seconds_per_chunk
         )
 
+        # TODO(julien)
+        # messages_queue could be empty when it's. That's why they are using messages_done
+        # Why is this function not running all the time in a separate thread?
+        # Instead of being redefined here and taking the risk that multiple copy in parallel
         async def send_to_call():
             response_buffer = ""
             cut_off = False
