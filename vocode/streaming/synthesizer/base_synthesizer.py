@@ -48,6 +48,7 @@ class SynthesisResult:
     def __init__(
         self,
         chunk_generator: Generator[ChunkResult, None, None],
+        # TODO(julien) I feel it should take in ms not seconds, por potentially a chunk id
         get_message_up_to: Callable[[int], str],
     ):
         self.chunk_generator = chunk_generator

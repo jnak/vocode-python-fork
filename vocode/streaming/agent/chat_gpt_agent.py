@@ -108,6 +108,8 @@ class ChatGPTAgent(BaseAgent):
         )
         # TODO(julien) This probably does not happen because transcriptions are discarded if they are not final
         if is_interrupt and self.agent_config.cut_off_response:
+            # This is for a feature where the AI Will say something when it's being interrupted
+            # TODO(julien) Let's not worry about it for now
             cut_off_response = self.get_cut_off_response()
             self.memory.chat_memory.messages.append(
                 ChatMessage(role="assistant", content=cut_off_response)
@@ -115,11 +117,10 @@ class ChatGPTAgent(BaseAgent):
             self.logger.debug("LLM Interupted: %s", cut_off_response)
             yield cut_off_response
             return
+
         prompt_messages = [
             ChatMessage(role="system", content=self.agent_config.prompt_preamble)
         ] + self.memory.chat_memory.messages
-        bot_memory_message = ChatMessage(role="assistant", content="")
-        self.memory.chat_memory.messages.append(bot_memory_message)
         stream = await openai.ChatCompletion.acreate(
             model=self.agent_config.model_name,
             messages=[
@@ -130,11 +131,18 @@ class ChatGPTAgent(BaseAgent):
             temperature=self.agent_config.temperature,
             stream=True,
         )
+        # TODO(julien) You moved this from above. Hopefully, this not breaking anything.
+        bot_memory_message = ChatMessage(role="assistant", content="")
+        self.memory.chat_memory.messages.append(bot_memory_message)
         async for message in stream_openai_response_async(
             stream,
             get_text=lambda choice: choice.get("delta", {}).get("content"),
         ):
-            bot_memory_message.content = f"{bot_memory_message.content} {message}"
+            bot_memory_message.content = (
+                f"{bot_memory_message.content} {message}"
+                if bot_memory_message.content
+                else message
+            )
             self.logger.debug("LLM Sentence: %s", message)
             yield message
 
@@ -149,3 +157,6 @@ class ChatGPTAgent(BaseAgent):
             ) or isinstance(memory_message, AIMessage):
                 memory_message.content = message
                 return
+
+    def terminate(self):
+        self.logger.debug("Full chat transcript: %s", self.memory.chat_memory.messages)

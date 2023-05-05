@@ -167,8 +167,8 @@ class StreamingConversation:
             self.logger.debug("Bot sentiment: %s", new_bot_sentiment)
             self.bot_sentiment = new_bot_sentiment
 
-    def receive_audio(self, chunk: bytes):
-        self.transcriber.send_audio(chunk)
+    async def receive_audio(self, chunk: bytes):
+        await self.transcriber.send_audio(chunk)
 
     async def send_messages_to_stream_async(
         self,
@@ -177,6 +177,8 @@ class StreamingConversation:
         wait_for_filler_audio: bool = False,
     ) -> Tuple[str, bool]:
         messages_queue = queue.Queue()
+        # This is to communicate that all the message for a given llm have been said
+        # With a stream you would not neeed that
         messages_done = threading.Event()
         speech_cut_off = threading.Event()
         seconds_per_chunk = TEXT_TO_SPEECH_CHUNK_SIZE_SECONDS
@@ -198,6 +200,9 @@ class StreamingConversation:
             self.is_current_synthesis_interruptable = should_allow_human_to_cut_off_bot
             while True:
                 try:
+                    # This is processing one sentence at a time in a synchronous way
+                    # Which means there is no parallelization of the synthesis
+                    # Additionally,
                     message: BaseMessage = messages_queue.get_nowait()
                 except queue.Empty:
                     # TODO(julien) What is that for?
@@ -220,6 +225,7 @@ class StreamingConversation:
                 )
                 # self.logger.debug("Message sent: {}".format(message_sent))
                 response_buffer = f"{response_buffer} {message_sent}"
+                # TODO(julien) This logic is messy
                 if cut_off:
                     speech_cut_off.set()
                     break
@@ -233,7 +239,7 @@ class StreamingConversation:
             )
             return response_buffer, cut_off
 
-        # Schedule a message to be synthesized and sent on the synthesizer threa
+        # Schedule a message to be synthesized and sent on the synthesizer thread
         asyncio.run_coroutine_threadsafe(send_to_call(), self.synthesizer_event_loop)
 
         messages_generated = 0
@@ -286,6 +292,12 @@ class StreamingConversation:
         synthesis_result = self.synthesizer.create_speech(
             message, chunk_size, bot_sentiment=self.bot_sentiment
         )
+        # This is waiting for the sppech to be played back before we generate the next sentence
+        # TODO(julien) Schedule this in a separate task that continuously pull from a queue to get its content
+        # This will probably require to move the message_sent and the cut_off to a different place
+        # This whole function should very much pull from a constant queue of messages to be synthesized and output a stream of audio to be played back
+        # The very last function of the chain only should be concern with the cut_off and the message_sent
+        # The playback step should be able to be queried for the current position in the audio
         message_sent, cut_off = await self.send_speech_to_output(
             message.text,
             synthesis_result,
@@ -305,7 +317,6 @@ class StreamingConversation:
     def warmup_synthesizer(self):
         self.synthesizer.ready_synthesizer()
 
-    # returns an estimate of what was sent up to, and a flag if the message was cut off
     async def send_speech_to_output(
         self,
         message,
@@ -314,6 +325,10 @@ class StreamingConversation:
         seconds_per_chunk: int,
         is_filler_audio: bool = False,
     ):
+        """
+        Returns an estimate of what was sent up to, and a flag if the message was cut off.
+        This process limit the throughput so the audio is sent at the same speed as it is played back.
+        """
         message_sent = message
         cut_off = False
         chunk_size = seconds_per_chunk * get_chunk_size_per_second(
@@ -356,7 +371,13 @@ class StreamingConversation:
         return message_sent, cut_off
 
     async def on_transcription_response(self, transcription: Transcription):
-        """Called by transcriber each a new transcription comes in. Even if not final."""
+        """
+        Called by transcriber each a new transcription comes in. Even if not final.
+        TODO(julien) It feels that logic should live on the base BaseTranscriber class.
+            Though it does not need access to is_human_speaking / is_interrupt
+            Do we really need is_interrupt? Shouldn't we interrupt as soon as we detect a human voice? Probably yes
+                Actually that not be the case with some of the filler words
+        """
         self.last_action_timestamp = time.time()
         if transcription.is_final:
             self.logger.debug(
@@ -370,19 +391,18 @@ class StreamingConversation:
             # send interrupt
             self.current_transcription_is_interrupt = False
             if self.is_current_synthesis_interruptable:
-                self.logger.debug("sending interrupt")
+                self.logger.debug("Sending interrupt")
                 self.current_transcription_is_interrupt = self.interrupt_all_synthesis()
             self.logger.debug("Human started speaking")
 
-        # TODO(julien) Look into this. This seems to be prone to race conditions
         transcription.is_interrupt = self.current_transcription_is_interrupt
-        # TODO(julien) This might not always correct because the human may still make a little pause
-        # Also it's not in sync / does not take into account transcription.confidence
         self.is_human_speaking = not transcription.is_final
         return await self.handle_transcription(transcription)
 
     async def handle_transcription(self, transcription: Transcription):
         """Called by on_transcription_response"""
+
+        # If the interrupt is not final then the message will be ignored
         if not transcription.is_final:
             return
 
@@ -464,11 +484,12 @@ class StreamingConversation:
     def interrupt_all_synthesis(self):
         """Returns true if any synthesis was interrupted"""
         num_interrupts = 0
+        self.logger.debug("Synthesizer: About to interrupt")
         while True:
             try:
                 stop_event = self.stop_events.get_nowait()
                 if not stop_event.is_set():
-                    self.logger.debug("Interrupting synthesis")
+                    self.logger.debug("Synthesizer: Interrupting")
                     stop_event.set()
                     num_interrupts += 1
             except queue.Empty:

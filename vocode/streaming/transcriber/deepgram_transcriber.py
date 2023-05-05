@@ -53,11 +53,14 @@ class DeepgramTranscriber(BaseTranscriber):
                 "Deepgram connection died, restarting, num_restarts: %s", restarts
             )
 
-    def send_audio(self, chunk):
+    async def send_audio(self, chunk):
         if (
             self.transcriber_config.downsampling
             and self.transcriber_config.audio_encoding == AudioEncoding.LINEAR16
         ):
+            self.logger.error(
+                "Deepgram: potentially expensive audio conversion in send_audio"
+            )
             chunk, _ = audioop.ratecv(
                 chunk,
                 2,
@@ -67,7 +70,7 @@ class DeepgramTranscriber(BaseTranscriber):
                 self.transcriber_config.sampling_rate,
                 None,
             )
-        self.audio_queue.put_nowait(chunk)
+        await self.audio_queue.put(chunk)
 
     def terminate(self):
         terminate_msg = json.dumps({"type": "CloseStream"})
@@ -181,6 +184,9 @@ class DeepgramTranscriber(BaseTranscriber):
         while not self._ended:
             try:
                 msg = await ws.recv()
+                self.logger.debug(
+                    "Deepgram: received message. Queue size: %i", len(self.msg_deque)
+                )
                 data = json.loads(msg)
                 self.msg_deque.appendleft(data)
             except Exception as e:
@@ -197,9 +203,13 @@ class DeepgramTranscriber(BaseTranscriber):
 
             while True:
                 if not len(self.msg_deque):
-                    await asyncio.sleep(0.001)
+                    await asyncio.sleep(0.0001)
                     continue
 
+                self.logger.debug(
+                    "Deepgram: about to process new message. Queue size: %i",
+                    len(self.msg_deque),
+                )
                 data = self.msg_deque.pop()
 
                 if len(self.msg_deque):
@@ -232,27 +242,34 @@ class DeepgramTranscriber(BaseTranscriber):
                     and data_confidence > 0.0
                     and data_is_final
                 ):
-                    buffer = f"{buffer} {data_top_choice['transcript']}"
+                    # do not a whitespace in between when the buffer is empty
+                    # make it a one liner
+                    buffer = (
+                        data_top_choice["transcript"]
+                        if not buffer
+                        else f"{buffer} {data_top_choice['transcript']}"
+                    )
 
                 if speech_final:
-                    # TODO(julien) Fix data confidence. Can we use the the confidence
-                    # and transcript of data since it's final?
-                    await self.on_response(Transcription(buffer, 0.5, True))
+                    # TODO(julien) Is that ok to use the confidence of the last message only?
+                    asyncio.create_task(
+                        self.process_transcription(buffer, data_confidence, True)
+                    )
                     buffer = ""
                     time_silent = 0
                 elif data_top_choice["transcript"] and data_confidence > 0.0:
-                    await self.on_response(
-                        Transcription(
-                            buffer,
-                            data_confidence,
-                            False,
-                        )
+                    asyncio.create_task(
+                        self.process_transcription(buffer, data_confidence, False)
                     )
                     time_silent = self.calculate_time_silent(data)
                 else:
+                    # TODO(julien) What's point of this? Can't we just rely on Deepgram for this?
                     time_silent += data["duration"]
         except Exception as e:
             self.logger.exception("Deepgram transcriber: process_msg_from_queue error")
+
+    async def process_transcription(self, buffer, confidence, is_final):
+        await self.on_response(Transcription(buffer, confidence, is_final))
 
     async def process(self):
         extra_headers = {"Authorization": f"Token {self.api_key}"}

@@ -211,6 +211,9 @@ class AzureSynthesizer(BaseSynthesizer):
         chunk_size: int,
         bot_sentiment: Optional[BotSentiment] = None,
     ) -> SynthesisResult:
+        # TODO(julien) This is fully synchronous. You cannot run it from the main thread.
+        # We should try to make it async as smome point.
+
         # offset = int(self.OFFSET_MS * (self.synthesizer_config.sampling_rate / 1000))
         offset = 0
         self.logger.debug(f"Synthesizing message: {message}")
@@ -218,6 +221,7 @@ class AzureSynthesizer(BaseSynthesizer):
         def chunk_generator(
             audio_data_stream: speechsdk.AudioDataStream, chunk_transform=lambda x: x
         ):
+            # Simplify chunk_generator
             audio_buffer = bytes(chunk_size)
             filled_size = audio_data_stream.read_data(audio_buffer)
             if filled_size != chunk_size:

@@ -179,7 +179,7 @@ class Call(StreamingConversation):
             self.latest_media_timestamp = int(media["timestamp"])
 
             self.logger.debug('Twilio handle_ws_message')
-            self.receive_audio(chunk)
+            await self.receive_audio(chunk)
         elif data["event"] == "stop":
             self.logger.debug(f"Media WS: Received event 'stop': {message}")
             self.logger.debug("Stopping...")
