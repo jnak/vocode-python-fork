@@ -397,7 +397,7 @@ class StreamingConversation:
 
         transcription.is_interrupt = self.current_transcription_is_interrupt
         self.is_human_speaking = not transcription.is_final
-        return await self.handle_transcription(transcription)
+        return asyncio.create_task(self.handle_transcription(transcription))
 
     async def handle_transcription(self, transcription: Transcription):
         """Called by on_transcription_response"""
@@ -578,3 +578,36 @@ class StreamingConversation:
 
     def is_active(self):
         return self.active
+
+
+class Worker:
+    def __init__(self, input_queue: asyncio.Queue, output_queue: asyncio.Queue) -> None:
+        self.input_queue = input_queue
+        self.output_queue = output_queue
+        self.current_task = None
+        self.worker_task = None
+
+    async def start_worker(self):
+        self.worker_task = asyncio.create_task(self._start_loop())
+        return self.worker_task
+
+    async def _start_loop(self):
+        while True:
+            item = await self.input_queue.get()
+            self.current_task = asyncio.create_task(self.process(item))
+            await self.current_task
+
+    async def process(self, item):
+        raise NotImplementedError
+
+    def stop_queue(self):
+        if self.current_task:
+            self.current_task.cancel()
+
+
+class DeepgramWorker:
+    pass
+
+
+class PlaybackWorker(Worker):
+    pass

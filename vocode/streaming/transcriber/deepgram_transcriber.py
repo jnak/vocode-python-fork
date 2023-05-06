@@ -252,14 +252,12 @@ class DeepgramTranscriber(BaseTranscriber):
 
                 if speech_final:
                     # TODO(julien) Is that ok to use the confidence of the last message only?
-                    asyncio.create_task(
-                        self.process_transcription(buffer, data_confidence, True)
-                    )
+                    await self.on_response(Transcription(buffer, data_confidence, True))
                     buffer = ""
                     time_silent = 0
                 elif data_top_choice["transcript"] and data_confidence > 0.0:
-                    asyncio.create_task(
-                        self.process_transcription(buffer, data_confidence, False)
+                    await self.on_response(
+                        Transcription(buffer, data_confidence, False)
                     )
                     time_silent = self.calculate_time_silent(data)
                 else:
@@ -267,9 +265,6 @@ class DeepgramTranscriber(BaseTranscriber):
                     time_silent += data["duration"]
         except Exception as e:
             self.logger.exception("Deepgram transcriber: process_msg_from_queue error")
-
-    async def process_transcription(self, buffer, confidence, is_final):
-        await self.on_response(Transcription(buffer, confidence, is_final))
 
     async def process(self):
         extra_headers = {"Authorization": f"Token {self.api_key}"}
