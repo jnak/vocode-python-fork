@@ -3,6 +3,7 @@ from .model import TypedModel
 from enum import Enum
 
 
+# TODO(julien) This is not clear why we need this pattern here
 class MessageType(str, Enum):
     BASE = "message_base"
     SSML = "message_ssml"

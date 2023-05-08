@@ -252,13 +252,11 @@ class DeepgramTranscriber(BaseTranscriber):
 
                 if speech_final:
                     # TODO(julien) Is that ok to use the confidence of the last message only?
-                    await self.on_response(Transcription(buffer, data_confidence, True))
+                    self.on_response(Transcription(buffer, data_confidence, True))
                     buffer = ""
                     time_silent = 0
                 elif data_top_choice["transcript"] and data_confidence > 0.0:
-                    await self.on_response(
-                        Transcription(buffer, data_confidence, False)
-                    )
+                    self.on_response(Transcription(buffer, data_confidence, False))
                     time_silent = self.calculate_time_silent(data)
                 else:
                     # TODO(julien) What's point of this? Can't we just rely on Deepgram for this?

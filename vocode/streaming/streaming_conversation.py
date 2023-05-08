@@ -197,6 +197,7 @@ class StreamingConversation:
         async def send_to_call():
             response_buffer = ""
             cut_off = False
+            # This is set as shared value. If there are multiple async calls, there would be issue
             self.is_current_synthesis_interruptable = should_allow_human_to_cut_off_bot
             while True:
                 try:
@@ -370,7 +371,7 @@ class StreamingConversation:
             stop_event.set()
         return message_sent, cut_off
 
-    async def on_transcription_response(self, transcription: Transcription):
+    def on_transcription_response(self, transcription: Transcription):
         """
         Called by transcriber each a new transcription comes in. Even if not final.
         TODO(julien) It feels that logic should live on the base BaseTranscriber class.
@@ -397,6 +398,7 @@ class StreamingConversation:
 
         transcription.is_interrupt = self.current_transcription_is_interrupt
         self.is_human_speaking = not transcription.is_final
+        # TODO(julien) This could be garbage collected if not held somewhere
         return asyncio.create_task(self.handle_transcription(transcription))
 
     async def handle_transcription(self, transcription: Transcription):
@@ -416,6 +418,8 @@ class StreamingConversation:
             goodbye_detected_task = asyncio.create_task(
                 self.goodbye_model.is_goodbye(transcription.message)
             )
+
+        # TODO(julien) This is weird. Why would you want to do this each a new final transcription is received
         if self.agent.get_agent_config().send_filler_audio:
             self.logger.debug("Sending filler audio")
             if self.synthesizer.filler_audios:
@@ -580,14 +584,14 @@ class StreamingConversation:
         return self.active
 
 
-class Worker:
+class QueueWorker:
     def __init__(self, input_queue: asyncio.Queue, output_queue: asyncio.Queue) -> None:
         self.input_queue = input_queue
         self.output_queue = output_queue
-        self.current_task = None
-        self.worker_task = None
+        self.current_task: None | asyncio.Task = None
+        self.worker_task: None | asyncio.Task = None
 
-    async def start_worker(self):
+    async def start_worker(self) -> asyncio.Task:
         self.worker_task = asyncio.create_task(self._start_loop())
         return self.worker_task
 
@@ -595,14 +599,54 @@ class Worker:
         while True:
             item = await self.input_queue.get()
             self.current_task = asyncio.create_task(self.process(item))
-            await self.current_task
+            try:
+                await self.current_task
+            except asyncio.CancelledError:
+                # This is a good place to do something if needed
+                # Ex: update the cut_off message
+                pass
 
     async def process(self, item):
+        """
+        Publish results onto output queue.
+        Calls to async function / task should be able to handle
+        asyncio.CancelledError gracefully:
+            - Ideally, you would want to make sure that async tasks await-ed
+              down the call stack are also cancelled
+              and are also handling CancelledError gracefully.
+            - When making async aiohttp calls, things should be ok, but it's
+              always best to add tests for that.
+        TODO(julien) Add function to recursively cancel and patterns to test
+            cancellation
+        TODO(julien) Do we want to abstract away the output queue so it only process stuff?
+            Let's see once we implement a couple
+        """
         raise NotImplementedError
 
-    def stop_queue(self):
-        if self.current_task:
-            self.current_task.cancel()
+    def cancel_work(self):
+        if self.current_task and not self.current_task.done():
+            return self.current_task.cancel()
+
+        return False
+
+    def stop_worker(self):
+        if self.worker_task:
+            return self.worker_task.cancel()
+
+        return False
+
+    async def _cancel_recursively(self, task: asyncio.Task):
+        # TODO(julien) Do we want to use this or something like hiarchechical cancellation such any.IO?
+        # https://stackoverflow.com/questions/70596654/asyncio-automatic-cancellation-of-subtasks
+        if not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+        if hasattr(task, "_fut_waiter") and not task._fut_waiter.done():
+            await self._cancel_recursively(task._fut_waiter)
 
 
 class DeepgramWorker:

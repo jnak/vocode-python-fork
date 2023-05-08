@@ -136,10 +136,16 @@ class BaseSynthesizer:
     def ready_synthesizer(self):
         pass
 
-    # given the number of seconds the message was allowed to go until, where did we get in the message?
     def get_message_cutoff_from_total_response_length(
         self, message: BaseMessage, seconds: int, size_of_output: int
     ) -> str:
+        """
+        Given the number of seconds the message was allowed to go until, where did we get in the message?
+
+        TODO(julien) This uses the computed average number of characters per seconds.
+            - This is not very precise. This should probably be more conservative
+            -
+        """
         estimated_output_seconds = (
             size_of_output / self.synthesizer_config.sampling_rate
         )

@@ -143,6 +143,7 @@ class AzureSynthesizer(BaseSynthesizer):
             )
         return filler_phrase_audios
 
+    # TODO(julien) This is not used anywhere
     def add_marks(self, message: str, index=0) -> str:
         search_result = re.search(r"([\.\,\:\;\-\—]+)", message)
         if search_result is None:
@@ -191,6 +192,7 @@ class AzureSynthesizer(BaseSynthesizer):
         connection.open(True)
 
     # given the number of seconds the message was allowed to go until, where did we get in the message?
+    # TODO(julien) We should make these classmethod or staticmethods so there is no concurrency risk
     def get_message_up_to(
         self,
         message: str,

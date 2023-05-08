@@ -28,7 +28,9 @@ class GoogleSynthesizer(BaseSynthesizer):
     ):
         super().__init__(synthesizer_config)
 
+        # TODO(julien) Why is this using the betav1 when v1 is out
         from google.cloud import texttospeech_v1beta1 as tts
+
         self.tts = tts
 
         # Instantiates a client
