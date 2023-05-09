@@ -14,7 +14,11 @@ from vocode.streaming.models.agent import AgentConfig, AgentType
 
 class AgentFactory:
     def create_agent(
-        self, agent_config: AgentConfig, logger: Optional[logging.Logger] = None
+        self,
+        agent_config: AgentConfig,
+        transcription_queue: asyncio.Queue,
+        message_queue: asyncio.Queue,
+        logger: Optional[logging.Logger] = None,
     ) -> BaseAgent:
         if agent_config.type == AgentType.LLM:
             return LLMAgent(agent_config=agent_config, logger=logger)

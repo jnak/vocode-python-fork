@@ -1,3 +1,4 @@
+import asyncio
 from langchain.prompts import (
     ChatPromptTemplate,
     MessagesPlaceholder,
@@ -18,16 +19,22 @@ from vocode import getenv
 from vocode.streaming.agent.base_agent import BaseAgent
 from vocode.streaming.models.agent import ChatGPTAgentConfig
 from vocode.streaming.agent.utils import stream_openai_response_async
+from vocode.streaming.models.worker import QueueWorker
+from vocode.streaming.transcriber.base_transcriber import Transcription
 
 
-class ChatGPTAgent(BaseAgent):
+class ChatGPTAgent(BaseAgent, QueueWorker):
     def __init__(
         self,
         agent_config: ChatGPTAgentConfig,
-        logger: logging.Logger = None,
-        openai_api_key: Optional[str] = None,
+        # TODO(julien) We want to make this a final transcription
+        input_queue: asyncio.Queue[Transcription],
+        # TODO(julien) We probably want to do this
+        output_queue: asyncio.Queue[str],
+        logger: logging.Logger | None = None,
+        openai_api_key: str | None = None,
     ):
-        super().__init__(agent_config)
+        super().__init__(agent_config, input_queue, output_queue)
         openai.api_key = openai_api_key or getenv("OPENAI_API_KEY")
         if not openai.api_key:
             raise ValueError("OPENAI_API_KEY must be set in environment or passed in")
@@ -64,6 +71,9 @@ class ChatGPTAgent(BaseAgent):
         self.conversation = ConversationChain(
             memory=self.memory, prompt=self.prompt, llm=self.llm
         )
+
+        # TODO(julien) Move this out of the init function so create_first_response
+        # can be made async and awaited
         self.first_response = (
             self.create_first_response(agent_config.expected_first_prompt)
             if agent_config.expected_first_prompt
@@ -72,51 +82,25 @@ class ChatGPTAgent(BaseAgent):
         self.is_first_response = True
 
     def create_first_response(self, first_prompt):
+        # TODO(julien) This should be async.
         self.logger.debug("LLM First message: %s", first_prompt)
         return self.conversation.predict(input=first_prompt)
 
-    async def respond(
-        self,
-        human_input,
-        is_interrupt: bool = False,
-        conversation_id: Optional[str] = None,
-    ) -> Tuple[str, bool]:
-        # TODO(julien) This does not happen when a message
-        if is_interrupt and self.agent_config.cut_off_response:
-            cut_off_response = self.get_cut_off_response()
-            self.memory.chat_memory.add_user_message(human_input)
-            self.memory.chat_memory.add_ai_message(cut_off_response)
-            return cut_off_response, False
-        self.logger.debug("LLM responding to human input")
-        if self.is_first_response and self.first_response:
-            self.logger.debug("First response is cached")
-            self.is_first_response = False
-            text = self.first_response
-        else:
-            text = await self.conversation.apredict(input=human_input)
-        self.logger.debug(f"LLM response: {text}")
-        return text, False
-
-    async def generate_response(
-        self,
-        human_input,
-        is_interrupt: bool = False,
-        conversation_id: Optional[str] = None,
-    ) -> AsyncGenerator[str, None]:
+    async def process(transcription):
         self.memory.chat_memory.messages.append(
-            ChatMessage(role="user", content=human_input)
+            ChatMessage(role="user", content=transcription.)
         )
-        # TODO(julien) This probably does not happen because transcriptions are discarded if they are not final
-        if is_interrupt and self.agent_config.cut_off_response:
-            # This is for a feature where the AI Will say something when it's being interrupted
-            # TODO(julien) Let's not worry about it for now
-            cut_off_response = self.get_cut_off_response()
-            self.memory.chat_memory.messages.append(
-                ChatMessage(role="assistant", content=cut_off_response)
-            )
-            self.logger.debug("LLM Interupted: %s", cut_off_response)
-            yield cut_off_response
-            return
+        # # TODO(julien) This probably does not happen because transcriptions are discarded if they are not final
+        # if is_interrupt and self.agent_config.cut_off_response:
+        #     # This is for a feature where the AI Will say something when it's being interrupted
+        #     # TODO(julien) Let's not worry about it for now. Especially since it probably does not work
+        #     cut_off_response = self.get_cut_off_response()
+        #     self.memory.chat_memory.messages.append(
+        #         ChatMessage(role="assistant", content=cut_off_response)
+        #     )
+        #     self.logger.debug("LLM Interupted: %s", cut_off_response)
+        #     yield cut_off_response
+        #     return
 
         prompt_messages = [
             ChatMessage(role="system", content=self.agent_config.prompt_preamble)
@@ -131,7 +115,7 @@ class ChatGPTAgent(BaseAgent):
             temperature=self.agent_config.temperature,
             stream=True,
         )
-        # TODO(julien) You moved this from above. Hopefully, this not breaking anything.
+
         bot_memory_message = ChatMessage(role="assistant", content="")
         self.memory.chat_memory.messages.append(bot_memory_message)
         async for message in stream_openai_response_async(
@@ -144,7 +128,7 @@ class ChatGPTAgent(BaseAgent):
                 else message
             )
             self.logger.debug("LLM Sentence: %s", message)
-            yield message
+            self.output_queue.put_nowait(message)
 
     def update_last_bot_message_on_cut_off(self, message: str):
         """Get the last message from the agent and delete"""

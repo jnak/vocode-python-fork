@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from typing import Optional
 from vocode.streaming.models.transcriber import TranscriberConfig, TranscriberType
@@ -7,14 +8,24 @@ from vocode.streaming.transcriber.google_transcriber import GoogleTranscriber
 from vocode.streaming.transcriber.rev_ai_transcriber import RevAITranscriber
 
 
+# TODO(julien) This pattern sucks. It would much easier to have config file
+# have a default but overridable factory
 class TranscriberFactory:
     def create_transcriber(
         self,
         transcriber_config: TranscriberConfig,
+        input_audio_queue: asyncio.Queue,
+        transcription_queue: asyncio.Queue,
         logger: Optional[logging.Logger] = None,
     ):
         if transcriber_config.type == TranscriberType.DEEPGRAM:
-            return DeepgramTranscriber(transcriber_config, logger=logger)
+            return DeepgramTranscriber(
+                transcriber_config,
+                input_audio_queue,
+                transcription_queue,
+                logger=logger,
+            )
+
         elif transcriber_config.type == TranscriberType.GOOGLE:
             return GoogleTranscriber(transcriber_config, logger=logger)
         elif transcriber_config.type == TranscriberType.ASSEMBLY_AI:

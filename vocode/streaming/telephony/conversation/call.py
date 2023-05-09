@@ -48,31 +48,35 @@ class Call(StreamingConversation):
         base_url: str,
         config_manager: BaseConfigManager,
         agent_config: AgentConfig,
-        transcriber_config: TranscriberConfig,
+        agent_factory: AgentFactory,
         synthesizer_config: SynthesizerConfig,
+        synthesizer_factory: SynthesizerFactory,
+        transcriber_config: TranscriberConfig,
+        transcriber_factory: TranscriberFactory,
+        conversation_id: str,
         twilio_config: Optional[TwilioConfig] = None,
         twilio_sid: Optional[str] = None,
-        conversation_id: Optional[str] = None,
-        transcriber_factory: TranscriberFactory = TranscriberFactory(),
-        agent_factory: AgentFactory = AgentFactory(),
-        synthesizer_factory: SynthesizerFactory = SynthesizerFactory(),
         events_manager: Optional[EventsManager] = None,
         logger: Optional[logging.Logger] = None,
     ):
         self.base_url = base_url
         self.config_manager = config_manager
-        self.output_device = TwilioOutputDevice()
+        # TODO(julien) This is not consistent the TwilioOutputDevice lives there but
+        # the input device is here in handle_ws_message and attach_ws_and_start
         self.twilio_config = twilio_config or TwilioConfig(
             account_sid=getenv("TWILIO_ACCOUNT_SID"),
             auth_token=getenv("TWILIO_AUTH_TOKEN"),
         )
         self.twilio_client = create_twilio_client(twilio_config)
         super().__init__(
-            self.output_device,
-            transcriber_factory.create_transcriber(transcriber_config),
-            agent_factory.create_agent(agent_config),
-            synthesizer_factory.create_synthesizer(synthesizer_config),
+            output_device=TwilioOutputDevice(),
             conversation_id=conversation_id,
+            agent_config=agent_config,
+            agent_factory=agent_factory,
+            transcriber_config=transcriber_config,
+            transcriber_factory=transcriber_factory,
+            synthesizer_config=synthesizer_config,
+            synthesizer_factory=synthesizer_factory,
             per_chunk_allowance_seconds=0.01,
             events_manager=events_manager,
             logger=logger,
@@ -80,6 +84,7 @@ class Call(StreamingConversation):
         self.twilio_sid = twilio_sid
         self.latest_media_timestamp = 0
 
+        # TODO(julien) Delete? This was just for logging
         self.last_message = None
 
     @staticmethod
@@ -99,14 +104,14 @@ class Call(StreamingConversation):
             logger=logger,
             config_manager=config_manager,
             agent_config=call_config.agent_config,
+            conversation_id=conversation_id,
+            agent_factory=agent_factory,
             transcriber_config=call_config.transcriber_config,
+            transcriber_factory=transcriber_factory,
             synthesizer_config=call_config.synthesizer_config,
+            synthesizer_factory=synthesizer_factory,
             twilio_config=call_config.twilio_config,
             twilio_sid=call_config.twilio_sid,
-            conversation_id=conversation_id,
-            transcriber_factory=transcriber_factory,
-            agent_factory=agent_factory,
-            synthesizer_factory=synthesizer_factory,
             events_manager=events_manager,
         )
 
@@ -173,12 +178,12 @@ class Call(StreamingConversation):
                     int(media["timestamp"]) - (self.latest_media_timestamp + 20)
                 )
                 self.logger.debug(f"Filling {bytes_to_fill} bytes of silence")
-                # TODO(julien) WTF is this? 
+                # TODO(julien) WTF is this?
                 # NOTE: 0xff is silence for mulaw audio
                 self.receive_audio(b"\xff" * bytes_to_fill)
             self.latest_media_timestamp = int(media["timestamp"])
 
-            self.logger.debug('Twilio handle_ws_message')
+            self.logger.debug("Twilio handle_ws_message")
             await self.receive_audio(chunk)
         elif data["event"] == "stop":
             self.logger.debug(f"Media WS: Received event 'stop': {message}")

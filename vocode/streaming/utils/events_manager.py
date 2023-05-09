@@ -3,8 +3,9 @@ from typing import List
 
 from vocode.streaming.models.events import Event, EventType
 
-class EventsManager:
 
+# TODO(julien) When is that for?
+class EventsManager:
     def __init__(self, subscriptions: List[EventType] = []):
         self.queue = asyncio.Queue()
         self.subscriptions = set(subscriptions)

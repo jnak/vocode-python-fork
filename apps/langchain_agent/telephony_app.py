@@ -18,6 +18,8 @@ logging.basicConfig()
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
+
+# TODO(julien) That seems pretty heavy handed just to handle a single event TRANSCRIPT_COMPLETE...
 class EventsManager(events_manager.EventsManager):
     def __init__(self):
         super().__init__(subscriptions=[EventType.TRANSCRIPT_COMPLETE])
@@ -25,7 +27,11 @@ class EventsManager(events_manager.EventsManager):
     def handle_event(self, event: Event):
         if event.type == EventType.TRANSCRIPT_COMPLETE:
             transcript_complete_event = typing.cast(TranscriptCompleteEvent, event)
-            add_transcript(transcript_complete_event.conversation_id, transcript_complete_event.transcript)
+            add_transcript(
+                transcript_complete_event.conversation_id,
+                transcript_complete_event.transcript,
+            )
+
 
 config_manager = RedisConfigManager()
 

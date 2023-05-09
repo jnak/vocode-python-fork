@@ -9,19 +9,25 @@ import random
 from vocode.streaming.agent.bot_sentiment_analyser import (
     BotSentimentAnalyser,
 )
+from vocode.streaming.agent.factory import AgentFactory
 from vocode.streaming.models.events import TranscriptCompleteEvent
 from vocode.streaming.models.message import BaseMessage
+from vocode.streaming.models.transcriber import TranscriberConfig
 from vocode.streaming.output_device.base_output_device import BaseOutputDevice
+from vocode.streaming.synthesizer.factory import SynthesizerFactory
+from vocode.streaming.transcriber.factory import TranscriberFactory
 from vocode.streaming.utils.events_manager import EventsManager
 from vocode.streaming.utils.goodbye_model import GoodbyeModel
 from vocode.streaming.utils.transcript import Transcript
 
 from vocode.streaming.models.agent import (
+    AgentConfig,
     FillerAudioConfig,
     FILLER_AUDIO_DEFAULT_SILENCE_THRESHOLD_SECONDS,
 )
 from vocode.streaming.models.synthesizer import (
     SentimentConfig,
+    SynthesizerConfig,
 )
 from vocode.streaming.constants import (
     TEXT_TO_SPEECH_CHUNK_SIZE_SECONDS,
@@ -48,29 +54,51 @@ from vocode.streaming.transcriber.base_transcriber import (
 class StreamingConversation:
     def __init__(
         self,
+        agent_config: AgentConfig,
+        agent_factory: AgentFactory,
+        synthesizer_config: SynthesizerConfig,
+        synthesizer_factory: SynthesizerFactory,
+        transcriber_config: TranscriberConfig,
+        transcriber_factory: TranscriberFactory,
+        # TODO(julien) Change oupput device to make it consistant with input and output
         output_device: BaseOutputDevice,
-        transcriber: BaseTranscriber,
-        agent: BaseAgent,
-        synthesizer: BaseSynthesizer,
         conversation_id: str = None,
-        per_chunk_allowance_seconds: int = PER_CHUNK_ALLOWANCE_SECONDS,
+        per_chunk_allowance_seconds: float = PER_CHUNK_ALLOWANCE_SECONDS,
         events_manager: Optional[EventsManager] = None,
         logger: Optional[logging.Logger] = None,
     ):
         self.id = conversation_id or create_conversation_id()
         self.logger = logger or logging.getLogger(__name__)
         self.output_device = output_device
-        self.transcriber = transcriber
-        self.transcriber.set_on_response(self.on_transcription_response)
-        self.transcriber_task = None
-        self.agent = agent
-        self.synthesizer = synthesizer
+
+        self.input_audio_queue = asyncio.Queue
+        self.transcription_queue = asyncio.Queue
+        self.transcriber = transcriber_factory.create_transcriber(
+            transcriber_config, self.input_audio_queue, self.transcription_queue
+        )
+
+        # TODO(julien) Do we also want a final transcription queue?
+        # self.final_transcription_queue = asyncio.Queue
+
+        self.agent_message_queue = asyncio.Queue
+        self.agent = agent_factory.create_agent(
+            agent_config, self.transcription_queue, self.agent_message_queue
+        )
+
+        self.synthesized_audio_queue = asyncio.Queue
+        self.synthesizer = synthesizer_factory.create_synthesizer(
+            synthesize_config, self.agent_message_queue, self.synthesized_audio_queue
+        )
+        # TODO(julien) Move this logic into the synthesizer class and abstract it away
         self.synthesizer_event_loop = asyncio.new_event_loop()
         self.synthesizer_thread = threading.Thread(
             name="synthesizer",
             target=create_loop_in_thread,
             args=(self.synthesizer_event_loop,),
         )
+
+        self.output_audio_queue = asyncio.Queue
+
         self.events_manager = events_manager or EventsManager()
         self.events_task = None
         self.per_chunk_allowance_seconds = per_chunk_allowance_seconds
@@ -101,12 +129,19 @@ class StreamingConversation:
         self.current_filler_seconds_per_chunk: int = 0
         self.current_transcription_is_interrupt: bool = False
 
+        if not self.agent.get_agent_config().generate_responses:
+            # TODO(julien) Delete this branch
+            raise NotImplementedError
+
     async def start(self, mark_ready: Optional[Callable[[], Awaitable[None]]] = None):
-        self.transcriber_task = asyncio.create_task(self.transcriber.run())
-        is_ready = await self.transcriber.ready()
-        if not is_ready:
-            raise Exception("Transcriber startup failed")
         self.synthesizer_thread.start()
+        self.agent.start()
+        self.transcriber.start()
+
+        # TODO(julien) Need to start the input and the ouput
+        self.conversation.start()
+
+        # julien - Ignore all this
         if self.agent.get_agent_config().send_filler_audio:
             filler_audio_config = (
                 self.agent.get_agent_config().send_filler_audio
@@ -116,7 +151,7 @@ class StreamingConversation:
                 else FillerAudioConfig()
             )
             self.synthesizer.set_filler_audios(filler_audio_config)
-        self.agent.start()
+
         if mark_ready:
             await mark_ready()
         if self.agent.get_agent_config().initial_message:
@@ -181,6 +216,8 @@ class StreamingConversation:
         # With a stream you would not neeed that
         messages_done = threading.Event()
         speech_cut_off = threading.Event()
+
+        # This computation should be memoized
         seconds_per_chunk = TEXT_TO_SPEECH_CHUNK_SIZE_SECONDS
         chunk_size = (
             get_chunk_size_per_second(
@@ -218,6 +255,12 @@ class StreamingConversation:
                 synthesis_result = self.synthesizer.create_speech(
                     message, chunk_size, bot_sentiment=self.bot_sentiment
                 )
+                # This is waiting for the sppech to be played back before we generate the next sentence
+                # TODO(julien) Schedule this in a separate task that continuously pull from a queue to get its content
+                # This will probably require to move the message_sent and the cut_off to a different place
+                # This whole function should very much pull from a constant queue of messages to be synthesized and output a stream of audio to be played back
+                # The very last function of the chain only should be concern with the cut_off and the message_sent
+                # The playback step should be able to be queried for the current position in the audio
                 message_sent, cut_off = await self.send_speech_to_output(
                     message.text,
                     synthesis_result,
@@ -259,61 +302,6 @@ class StreamingConversation:
             if wait_for_filler_audio:
                 self.interrupt_all_synthesis()
         messages_done.set()
-
-    def send_message_to_stream_nonblocking(
-        self,
-        message: BaseMessage,
-        should_allow_human_to_cut_off_bot: bool,
-    ):
-        asyncio.run_coroutine_threadsafe(
-            self.send_message_to_stream_async(
-                message,
-                self.agent.get_agent_config().allow_agent_to_be_cut_off,
-            ),
-            self.synthesizer_event_loop,
-        )
-
-    async def send_message_to_stream_async(
-        self,
-        message: BaseMessage,
-        should_allow_human_to_cut_off_bot: bool,
-    ) -> Tuple[str, bool]:
-        self.is_current_synthesis_interruptable = should_allow_human_to_cut_off_bot
-        stop_event = self.enqueue_stop_event()
-        self.logger.debug("Synthesizing speech for message")
-        # This computation should be memoized
-        seconds_per_chunk = TEXT_TO_SPEECH_CHUNK_SIZE_SECONDS
-        chunk_size = (
-            get_chunk_size_per_second(
-                self.synthesizer.get_synthesizer_config().audio_encoding,
-                self.synthesizer.get_synthesizer_config().sampling_rate,
-            )
-            * seconds_per_chunk
-        )
-        synthesis_result = self.synthesizer.create_speech(
-            message, chunk_size, bot_sentiment=self.bot_sentiment
-        )
-        # This is waiting for the sppech to be played back before we generate the next sentence
-        # TODO(julien) Schedule this in a separate task that continuously pull from a queue to get its content
-        # This will probably require to move the message_sent and the cut_off to a different place
-        # This whole function should very much pull from a constant queue of messages to be synthesized and output a stream of audio to be played back
-        # The very last function of the chain only should be concern with the cut_off and the message_sent
-        # The playback step should be able to be queried for the current position in the audio
-        message_sent, cut_off = await self.send_speech_to_output(
-            message.text,
-            synthesis_result,
-            stop_event,
-            seconds_per_chunk,
-        )
-        self.logger.debug("Message sent: {}".format(message_sent))
-        if cut_off:
-            self.agent.update_last_bot_message_on_cut_off(message_sent)
-        self.transcript.add_bot_message(
-            text=message_sent,
-            events_manager=self.events_manager,
-            conversation_id=self.id,
-        )
-        return message_sent, cut_off
 
     def warmup_synthesizer(self):
         self.synthesizer.ready_synthesizer()
@@ -439,37 +427,17 @@ class StreamingConversation:
             else:
                 self.logger.debug("No filler audio available for synthesizer")
         self.logger.debug("Generating response for transcription")
-        if self.agent.get_agent_config().generate_responses:
-            responses = self.agent.generate_response(
-                transcription.message,
-                is_interrupt=transcription.is_interrupt,
-                conversation_id=self.id,
-            )
-            await self.send_messages_to_stream_async(
-                responses,
-                self.agent.get_agent_config().allow_agent_to_be_cut_off,
-                wait_for_filler_audio=self.agent.get_agent_config().send_filler_audio,
-            )
-        else:
-            response, should_stop = await self.agent.respond(
-                transcription.message,
-                is_interrupt=transcription.is_interrupt,
-                conversation_id=self.id,
-            )
-            if self.agent.get_agent_config().send_filler_audio:
-                self.interrupt_all_synthesis()
-                self.wait_for_filler_audio_to_finish()
-            if should_stop:
-                self.logger.debug("Agent requested to stop")
-                self.mark_terminated()
-                return
-            if response:
-                self.send_message_to_stream_nonblocking(
-                    BaseMessage(text=response),
-                    self.agent.get_agent_config().allow_agent_to_be_cut_off,
-                )
-            else:
-                self.logger.debug("No response generated")
+        responses = self.agent.generate_response(
+            transcription.message,
+            is_interrupt=transcription.is_interrupt,
+            conversation_id=self.id,
+        )
+        await self.send_messages_to_stream_async(
+            responses,
+            self.agent.get_agent_config().allow_agent_to_be_cut_off,
+            wait_for_filler_audio=self.agent.get_agent_config().send_filler_audio,
+        )
+
         if goodbye_detected_task:
             try:
                 goodbye_detected = await asyncio.wait_for(goodbye_detected_task, 0.1)
@@ -565,93 +533,19 @@ class StreamingConversation:
         if self.events_manager and self.events_task:
             self.logger.debug("Terminating events Task")
             self.events_manager.end()
+
         self.logger.debug("Terminating agent")
         self.agent.terminate()
         self.logger.debug("Terminating speech transcriber")
         self.transcriber.terminate()
+
         self.logger.debug("Terminating synthesizer event loop")
-        self.synthesizer_event_loop.call_soon_threadsafe(
-            self.synthesizer_event_loop.stop
-        )
+        self.synthesizer.termininate()
         self.logger.debug("Terminating synthesizer thread")
         if self.synthesizer_thread.is_alive():
             self.synthesizer_thread.join()
+
         self.logger.debug("Terminating transcriber task")
-        self.transcriber_task.cancel()
-        self.logger.debug("Successfully terminated")
 
     def is_active(self):
         return self.active
-
-
-class QueueWorker:
-    def __init__(self, input_queue: asyncio.Queue, output_queue: asyncio.Queue) -> None:
-        self.input_queue = input_queue
-        self.output_queue = output_queue
-        self.current_task: None | asyncio.Task = None
-        self.worker_task: None | asyncio.Task = None
-
-    async def start_worker(self) -> asyncio.Task:
-        self.worker_task = asyncio.create_task(self._start_loop())
-        return self.worker_task
-
-    async def _start_loop(self):
-        while True:
-            item = await self.input_queue.get()
-            self.current_task = asyncio.create_task(self.process(item))
-            try:
-                await self.current_task
-            except asyncio.CancelledError:
-                # This is a good place to do something if needed
-                # Ex: update the cut_off message
-                pass
-
-    async def process(self, item):
-        """
-        Publish results onto output queue.
-        Calls to async function / task should be able to handle
-        asyncio.CancelledError gracefully:
-            - Ideally, you would want to make sure that async tasks await-ed
-              down the call stack are also cancelled
-              and are also handling CancelledError gracefully.
-            - When making async aiohttp calls, things should be ok, but it's
-              always best to add tests for that.
-        TODO(julien) Add function to recursively cancel and patterns to test
-            cancellation
-        TODO(julien) Do we want to abstract away the output queue so it only process stuff?
-            Let's see once we implement a couple
-        """
-        raise NotImplementedError
-
-    def cancel_work(self):
-        if self.current_task and not self.current_task.done():
-            return self.current_task.cancel()
-
-        return False
-
-    def stop_worker(self):
-        if self.worker_task:
-            return self.worker_task.cancel()
-
-        return False
-
-    async def _cancel_recursively(self, task: asyncio.Task):
-        # TODO(julien) Do we want to use this or something like hiarchechical cancellation such any.IO?
-        # https://stackoverflow.com/questions/70596654/asyncio-automatic-cancellation-of-subtasks
-        if not task.done():
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
-
-        if hasattr(task, "_fut_waiter") and not task._fut_waiter.done():
-            await self._cancel_recursively(task._fut_waiter)
-
-
-class DeepgramWorker:
-    pass
-
-
-class PlaybackWorker(Worker):
-    pass

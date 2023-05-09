@@ -28,10 +28,16 @@ class DeepgramTranscriber(BaseTranscriber):
     def __init__(
         self,
         transcriber_config: DeepgramTranscriberConfig,
+        audio_queue: asyncio.Queue[bytes],
+        transcription_queue: asyncio.Queue[Transcription],
         logger: logging.Logger = None,
         api_key: str = None,
     ):
-        super().__init__(transcriber_config)
+        super().__init__(
+            transcriber_config,
+            audio_queue,
+            transcription_queue,
+        )
         self.api_key = api_key or getenv("DEEPGRAM_API_KEY")
         if not self.api_key:
             raise Exception(
@@ -44,38 +50,30 @@ class DeepgramTranscriber(BaseTranscriber):
         self.audio_queue = asyncio.Queue()
         self.msg_deque = deque()
 
-    async def run(self):
+    async def run_loop(self):
         restarts = 0
         while not self._ended and restarts < NUM_RESTARTS:
-            await self.process()
+            async with websockets.connect(
+                self.get_deepgram_url(),
+                extra_headers={"Authorization": f"Token {self.api_key}"},
+            ) as ws:
+                await asyncio.gather(
+                    self.send_audio_to_ws(ws),
+                    # TODO(julien) This should probably one function
+                    # Let's simplify once everything works smoothly
+                    self.receive_msg_from_ws(ws),
+                    self.process_msg_from_queue(),
+                )
             restarts += 1
             self.logger.debug(
                 "Deepgram connection died, restarting, num_restarts: %s", restarts
             )
 
-    async def send_audio(self, chunk):
-        if (
-            self.transcriber_config.downsampling
-            and self.transcriber_config.audio_encoding == AudioEncoding.LINEAR16
-        ):
-            self.logger.error(
-                "Deepgram: potentially expensive audio conversion in send_audio"
-            )
-            chunk, _ = audioop.ratecv(
-                chunk,
-                2,
-                1,
-                self.transcriber_config.sampling_rate
-                * self.transcriber_config.downsampling,
-                self.transcriber_config.sampling_rate,
-                None,
-            )
-        await self.audio_queue.put(chunk)
-
     def terminate(self):
         terminate_msg = json.dumps({"type": "CloseStream"})
-        self.audio_queue.put_nowait(terminate_msg)
+        self.input_queue.put_nowait(terminate_msg)
         self._ended = True
+        super().terminate()
 
     def get_deepgram_url(self):
         if self.transcriber_config.audio_encoding == AudioEncoding.LINEAR16:
@@ -169,11 +167,29 @@ class DeepgramTranscriber(BaseTranscriber):
         self.logger.debug("Starting Deepgram transcriber sender")
         while not self._ended:
             try:
-                data = await asyncio.wait_for(self.audio_queue.get(), 1)
+                chunk = await asyncio.wait_for(self.audio_queue.get(), 1)
             except asyncio.exceptions.TimeoutError:
                 self.logger.exception("Deepgram transcriber sender: TimeoutError")
                 break
-            await ws.send(data)
+
+            if (
+                self.transcriber_config.downsampling
+                and self.transcriber_config.audio_encoding == AudioEncoding.LINEAR16
+            ):
+                self.logger.error(
+                    "Deepgram: potentially expensive audio conversion in send_audio"
+                )
+                chunk, _ = audioop.ratecv(
+                    chunk,
+                    2,
+                    1,
+                    self.transcriber_config.sampling_rate
+                    * self.transcriber_config.downsampling,
+                    self.transcriber_config.sampling_rate,
+                    None,
+                )
+
+            await ws.send(chunk)
         self.logger.debug("Terminating Deepgram transcriber sender")
 
     async def receive_msg_from_ws(self, ws: WebSocketClientProtocol):
@@ -263,18 +279,6 @@ class DeepgramTranscriber(BaseTranscriber):
                     time_silent += data["duration"]
         except Exception as e:
             self.logger.exception("Deepgram transcriber: process_msg_from_queue error")
-
-    async def process(self):
-        extra_headers = {"Authorization": f"Token {self.api_key}"}
-
-        async with websockets.connect(
-            self.get_deepgram_url(), extra_headers=extra_headers
-        ) as ws:
-            await asyncio.gather(
-                self.send_audio_to_ws(ws),
-                self.receive_msg_from_ws(ws),
-                self.process_msg_from_queue(),
-            )
 
 
 def top_choice(resp):
