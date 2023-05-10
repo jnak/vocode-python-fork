@@ -77,12 +77,12 @@ class StreamingConversation:
             transcriber_config, self.input_audio_queue, self.transcription_queue
         )
 
-        # TODO(julien) Do we also want a final transcription queue?
-        # self.final_transcription_queue = asyncio.Queue
+        # hande_transcription_task consumes self.transcription_queue and produce on this queue
+        self.final_transcription_queue = asyncio.Queue
 
         self.agent_message_queue = asyncio.Queue
         self.agent = agent_factory.create_agent(
-            agent_config, self.transcription_queue, self.agent_message_queue
+            agent_config, self.final_transcription_queue, self.agent_message_queue
         )
 
         self.synthesized_audio_queue = asyncio.Queue
@@ -136,6 +136,9 @@ class StreamingConversation:
     async def start(self, mark_ready: Optional[Callable[[], Awaitable[None]]] = None):
         self.synthesizer_thread.start()
         self.agent.start()
+        self.consume_transcriptions_task = asyncio.create_task(
+            self.handle_transcription()
+        )
         self.transcriber.start()
 
         # TODO(julien) Need to start the input and the ouput
@@ -360,94 +363,91 @@ class StreamingConversation:
             stop_event.set()
         return message_sent, cut_off
 
-    def on_transcription_response(self, transcription: Transcription):
+    async def handle_transcription(self):
         """
-        Called by transcriber each a new transcription comes in. Even if not final.
-        TODO(julien) It feels that logic should live on the base BaseTranscriber class.
-            Though it does not need access to is_human_speaking / is_interrupt
-            Do we really need is_interrupt? Shouldn't we interrupt as soon as we detect a human voice? Probably yes
-                Actually that not be the case with some of the filler words
+        This is run as a task
         """
-        self.last_action_timestamp = time.time()
-        if transcription.is_final:
-            self.logger.debug(
-                "Got transcription: {}, confidence: {}".format(
-                    transcription.message, transcription.confidence
+        while self.active:
+            # TODO(julien) Monitor queue depth
+            transcription = await self.transcription_queue.get()
+
+            self.last_action_timestamp = time.time()
+            if transcription.is_final:
+                self.logger.debug(
+                    "Got transcription: {}, confidence: {}".format(
+                        transcription.message, transcription.confidence
+                    )
                 )
-            )
-        if not self.is_human_speaking and transcription.confidence > (
-            self.transcriber.get_transcriber_config().min_interrupt_confidence or 0
-        ):
-            # send interrupt
-            self.current_transcription_is_interrupt = False
-            if self.is_current_synthesis_interruptable:
-                self.logger.debug("Sending interrupt")
-                self.current_transcription_is_interrupt = self.interrupt_all_synthesis()
-            self.logger.debug("Human started speaking")
+            if not self.is_human_speaking and transcription.confidence > (
+                self.transcriber.get_transcriber_config().min_interrupt_confidence or 0
+            ):
+                # send interrupt
+                self.current_transcription_is_interrupt = False
+                if self.is_current_synthesis_interruptable:
+                    self.logger.debug("Sending interrupt")
+                    # TODO(julien) We want to interrupt the LLM, the synthesis, and the playback
+                    self.current_transcription_is_interrupt = (
+                        self.interrupt_all_synthesis()
+                    )
+                self.logger.debug("Human started speaking")
 
-        transcription.is_interrupt = self.current_transcription_is_interrupt
-        self.is_human_speaking = not transcription.is_final
-        # TODO(julien) This could be garbage collected if not held somewhere
-        return asyncio.create_task(self.handle_transcription(transcription))
+            transcription.is_interrupt = self.current_transcription_is_interrupt
+            self.is_human_speaking = not transcription.is_final
 
-    async def handle_transcription(self, transcription: Transcription):
-        """Called by on_transcription_response"""
+            if not transcription.is_final:
+                return
 
-        # If the interrupt is not final then the message will be ignored
-        if not transcription.is_final:
-            return
-
-        self.transcript.add_human_message(
-            text=transcription.message,
-            events_manager=self.events_manager,
-            conversation_id=self.id,
-        )
-        goodbye_detected_task = None
-        if self.agent.get_agent_config().end_conversation_on_goodbye:
-            goodbye_detected_task = asyncio.create_task(
-                self.goodbye_model.is_goodbye(transcription.message)
+            self.transcript.add_human_message(
+                text=transcription.message,
+                events_manager=self.events_manager,
+                conversation_id=self.id,
             )
 
-        # TODO(julien) This is weird. Why would you want to do this each a new final transcription is received
-        if self.agent.get_agent_config().send_filler_audio:
-            self.logger.debug("Sending filler audio")
-            if self.synthesizer.filler_audios:
-                filler_audio = random.choice(self.synthesizer.filler_audios)
-                self.logger.debug(f"Chose {filler_audio.message.text}")
-                self.current_filler_audio_done_event = threading.Event()
-                self.current_filler_seconds_per_chunk = filler_audio.seconds_per_chunk
-                stop_event = self.enqueue_stop_event()
-                asyncio.run_coroutine_threadsafe(
-                    self.send_filler_audio_to_output(
-                        filler_audio,
-                        stop_event,
-                        done_event=self.current_filler_audio_done_event,
-                    ),
-                    self.synthesizer_event_loop,
-                )
-            else:
-                self.logger.debug("No filler audio available for synthesizer")
-        self.logger.debug("Generating response for transcription")
-        responses = self.agent.generate_response(
-            transcription.message,
-            is_interrupt=transcription.is_interrupt,
-            conversation_id=self.id,
-        )
-        await self.send_messages_to_stream_async(
-            responses,
-            self.agent.get_agent_config().allow_agent_to_be_cut_off,
-            wait_for_filler_audio=self.agent.get_agent_config().send_filler_audio,
-        )
+            # TODO(julien) There was some weird interaction with this and the llm
+            # Ignore for now
+            # goodbye_detected_task = None
+            # if self.agent.get_agent_config().end_conversation_on_goodbye:
+            #     goodbye_detected_task = asyncio.create_task(
+            #         self.goodbye_model.is_goodbye(transcription.message)
+            #     )
 
-        if goodbye_detected_task:
-            try:
-                goodbye_detected = await asyncio.wait_for(goodbye_detected_task, 0.1)
-                if goodbye_detected:
-                    self.logger.debug("Goodbye detected, ending conversation")
-                    self.mark_terminated()
-                    return
-            except asyncio.TimeoutError:
-                self.logger.debug("Goodbye detection timed out")
+            # TODO(julien) This is weird. Why would you want to do this each a new final transcription is received
+            # Ignore that for now
+            # if self.agent.get_agent_config().send_filler_audio:
+            #     self.logger.debug("Sending filler audio")
+            #     if self.synthesizer.filler_audios:
+            #         filler_audio = random.choice(self.synthesizer.filler_audios)
+            #         self.logger.debug(f"Chose {filler_audio.message.text}")
+            #         self.current_filler_audio_done_event = threading.Event()
+            #         self.current_filler_seconds_per_chunk = (
+            #             filler_audio.seconds_per_chunk
+            #         )
+            #         stop_event = self.enqueue_stop_event()
+            #         asyncio.run_coroutine_threadsafe(
+            #             self.send_filler_audio_to_output(
+            #                 filler_audio,
+            #                 stop_event,
+            #                 done_event=self.current_filler_audio_done_event,
+            #             ),
+            #             self.synthesizer_event_loop,
+            #         )
+            #     else:
+            #         self.logger.debug("No filler audio available for synthesizer")
+            # self.logger.debug("Generating response for transcription")
+
+            self.final_transcription_queue.put_nowait(transcription)
+
+            # if goodbye_detected_task:
+            #     try:
+            #         goodbye_detected = await asyncio.wait_for(
+            #             goodbye_detected_task, 0.1
+            #         )
+            #         if goodbye_detected:
+            #             self.logger.debug("Goodbye detected, ending conversation")
+            #             self.mark_terminated()
+            #             return
+            #     except asyncio.TimeoutError:
+            #         self.logger.debug("Goodbye detection timed out")
 
     def enqueue_stop_event(self):
         stop_event = threading.Event()

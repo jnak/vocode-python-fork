@@ -86,11 +86,12 @@ class ChatGPTAgent(BaseAgent, QueueWorker):
         self.logger.debug("LLM First message: %s", first_prompt)
         return self.conversation.predict(input=first_prompt)
 
-    async def process(transcription):
+    async def process(self, transcription: Transcription):
         self.memory.chat_memory.messages.append(
-            ChatMessage(role="user", content=transcription.)
+            ChatMessage(role="user", content=transcription.message)
         )
-        # # TODO(julien) This probably does not happen because transcriptions are discarded if they are not final
+        # TODO(julien) This probably does not happen because transcriptions are discarded if they are not final
+        # Ingore for now
         # if is_interrupt and self.agent_config.cut_off_response:
         #     # This is for a feature where the AI Will say something when it's being interrupted
         #     # TODO(julien) Let's not worry about it for now. Especially since it probably does not work
@@ -132,8 +133,8 @@ class ChatGPTAgent(BaseAgent, QueueWorker):
 
     def update_last_bot_message_on_cut_off(self, message: str):
         """Get the last message from the agent and delete"""
-        # TODO(julien) It would probably make more sense to add messages only once they've been played back
-        # There is no use for having in the history until then
+        # TODO(julien) It would be more correct / easier to add messages only once they've been played back
+        # I don't see see the poing in setting the history before then - it's confusing at best.
         for memory_message in self.memory.chat_memory.messages[::-1]:
             if (
                 isinstance(memory_message, ChatMessage)

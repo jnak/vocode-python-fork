@@ -7,15 +7,14 @@ from vocode.streaming.models.agent import (
     ChatGPTAgentConfig,
     LLMAgentConfig,
 )
-from vocode.streaming.models.worker import SimpleAsyncWorker
+from vocode.streaming.models.worker import SimpleQueueWorker
 from vocode.streaming.transcriber.base_transcriber import Transcription
 
 
-class BaseAgent(SimpleAsyncWorker):
+class BaseAgent(SimpleQueueWorker):
     def __init__(
         self,
         agent_config: AgentConfig,
-        # TODO(julien) We want to make this a final transcription
         transcription_queue: asyncio.Queue[Transcription],
         # TODO(julien) We probably want to do this
         message_queue: asyncio.Queue[str],
