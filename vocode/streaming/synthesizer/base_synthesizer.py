@@ -1,4 +1,3 @@
-import asyncio
 import os
 from typing import Any, Generator, Callable, List, Optional
 import math
@@ -10,7 +9,6 @@ from nltk.tokenize.treebank import TreebankWordDetokenizer
 from vocode.streaming.agent.bot_sentiment_analyser import BotSentiment
 from vocode.streaming.models.agent import FillerAudioConfig
 from vocode.streaming.models.message import BaseMessage
-from vocode.streaming.models.worker import AsyncWorker
 from vocode.streaming.utils import convert_wav, get_chunk_size_per_second
 from vocode.streaming.models.audio_encoding import AudioEncoding
 from vocode.streaming.models.synthesizer import SynthesizerConfig
@@ -101,14 +99,8 @@ class FillerAudio:
         return SynthesisResult(output_generator, lambda seconds: self.message.text)
 
 
-class BaseSynthesizer(AsyncWorker):
-    def __init__(
-        self,
-        synthesizer_config: SynthesizerConfig,
-        input_queue: asyncio.Queue,
-        output_queue: asyncio.Queue,
-    ):
-        super().__init__(input_queue, output_queue)
+class BaseSynthesizer:
+    def __init__(self, synthesizer_config: SynthesizerConfig):
         self.synthesizer_config = synthesizer_config
         if synthesizer_config.audio_encoding == AudioEncoding.MULAW:
             assert (
@@ -144,16 +136,10 @@ class BaseSynthesizer(AsyncWorker):
     def ready_synthesizer(self):
         pass
 
+    # given the number of seconds the message was allowed to go until, where did we get in the message?
     def get_message_cutoff_from_total_response_length(
         self, message: BaseMessage, seconds: int, size_of_output: int
     ) -> str:
-        """
-        Given the number of seconds the message was allowed to go until, where did we get in the message?
-
-        TODO(julien) This uses the computed average number of characters per seconds.
-            - This is not very precise. This should probably be more conservative
-            -
-        """
         estimated_output_seconds = (
             size_of_output / self.synthesizer_config.sampling_rate
         )
@@ -168,26 +154,16 @@ class BaseSynthesizer(AsyncWorker):
         tokens = word_tokenize(message.text)
         return TreebankWordDetokenizer().detokenize(tokens[:estimated_words_spoken])
 
-    async def run_loop(self):
-        """
-        Naive implementation that synthesize a message sequentially.
-        However the result can be streamed in real time depending on `synthesize` implementation.
-        """
-        while True:
-            message = await self.input_queue.get()
-            self.current_task = asyncio.create_task(self.synthesize(message))
-            try:
-                await self.current_task
-            except asyncio.CancelledError:
-                # This is a good place to do something if needed
-                # Ex: update the cut_off message
-                pass
-
-    def synthesize(self, message):
-        """A message should be synthesized and the audio should be put on the output queue."""
+    # returns a chunk generator and a thunk that can tell you what part of the message was read given the number of seconds spoken
+    # chunk generator must return a ChunkResult, essentially a tuple (bytes of size chunk_size, flag if it is the last chunk)
+    def create_speech(
+        self,
+        message: BaseMessage,
+        chunk_size: int,
+        bot_sentiment: Optional[BotSentiment] = None,
+    ) -> SynthesisResult:
         raise NotImplementedError
 
-    # TODO(julien)
     # @param file - a file-like object in wav format
     def create_synthesis_result_from_wav(
         self, file: Any, message: BaseMessage, chunk_size: int

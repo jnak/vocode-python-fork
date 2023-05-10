@@ -7,9 +7,6 @@ class AsyncWorker:
         self.input_queue = input_queue
         self.output_queue = output_queue
 
-    # TODO(julien) Should this be async?
-    # For the cases, where it needs to connect to remote IO (ex deepgram websocket)
-    # Though it should handle reconnection gracefully and callers should not have to call around it
     def start(self) -> asyncio.Task:
         self.worker_task = asyncio.create_task(self.run_loop())
         return self.worker_task

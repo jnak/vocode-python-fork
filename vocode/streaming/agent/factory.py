@@ -12,6 +12,8 @@ from vocode.streaming.agent.restful_user_implemented_agent import (
 from vocode.streaming.models.agent import AgentConfig, AgentType
 
 
+# TODO(julien) This pattern is hard to work with.
+# It would much easier to have config object itself include a default but overridable factory
 class AgentFactory:
     def create_agent(
         self,

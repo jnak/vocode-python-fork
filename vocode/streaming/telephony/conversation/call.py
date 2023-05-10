@@ -162,8 +162,8 @@ class Call(StreamingConversation):
         if data["event"] == "media":
             media = data["media"]
             chunk = base64.b64decode(media["payload"])
-            # TODO(julien) WTF is this? I have no clue why that's needed
-            # 1. There needs to check for existence otherwise the first message is always going to go through that
+            # TODO(julien) What is this?
+            # Check for existence otherwise the first message is always going to go through that
             if self.latest_media_timestamp and self.latest_media_timestamp + 20 < int(
                 media["timestamp"]
             ):
@@ -178,13 +178,13 @@ class Call(StreamingConversation):
                     int(media["timestamp"]) - (self.latest_media_timestamp + 20)
                 )
                 self.logger.debug(f"Filling {bytes_to_fill} bytes of silence")
-                # TODO(julien) WTF is this?
+                # TODO(julien) What is this?
                 # NOTE: 0xff is silence for mulaw audio
                 self.receive_audio(b"\xff" * bytes_to_fill)
             self.latest_media_timestamp = int(media["timestamp"])
 
             self.logger.debug("Twilio handle_ws_message")
-            await self.receive_audio(chunk)
+            self.receive_audio(chunk)
         elif data["event"] == "stop":
             self.logger.debug(f"Media WS: Received event 'stop': {message}")
             self.logger.debug("Stopping...")

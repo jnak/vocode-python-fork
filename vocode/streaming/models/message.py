@@ -3,7 +3,6 @@ from .model import TypedModel
 from enum import Enum
 
 
-# TODO(julien) This is not clear why we need this pattern here
 class MessageType(str, Enum):
     BASE = "message_base"
     SSML = "message_ssml"
@@ -12,6 +11,7 @@ class MessageType(str, Enum):
 class BaseMessage(TypedModel, type=MessageType.BASE):
     text: str
 
+    # Julien - This was needed because some places were treating this messsage as a string
     def __str__(self):
         return self.text
 

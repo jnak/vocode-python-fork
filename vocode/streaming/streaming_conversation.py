@@ -87,7 +87,7 @@ class StreamingConversation:
 
         self.synthesized_audio_queue = asyncio.Queue
         self.synthesizer = synthesizer_factory.create_synthesizer(
-            synthesize_config, self.agent_message_queue, self.synthesized_audio_queue
+            synthesizer_config, self.agent_message_queue, self.synthesized_audio_queue
         )
         # TODO(julien) Move this logic into the synthesizer class and abstract it away
         self.synthesizer_event_loop = asyncio.new_event_loop()
@@ -136,13 +136,10 @@ class StreamingConversation:
     async def start(self, mark_ready: Optional[Callable[[], Awaitable[None]]] = None):
         self.synthesizer_thread.start()
         self.agent.start()
-        self.consume_transcriptions_task = asyncio.create_task(
+        self.handle_transcription_task = asyncio.create_task(
             self.handle_transcription()
         )
         self.transcriber.start()
-
-        # TODO(julien) Need to start the input and the ouput
-        self.conversation.start()
 
         # julien - Ignore all this
         if self.agent.get_agent_config().send_filler_audio:
@@ -205,10 +202,10 @@ class StreamingConversation:
             self.logger.debug("Bot sentiment: %s", new_bot_sentiment)
             self.bot_sentiment = new_bot_sentiment
 
-    # TODO(julien) do we want to simplify that?
-    async def receive_audio(self, chunk: bytes):
-        await self.transcriber.send_audio(chunk)
+    def receive_audio(self, chunk: bytes):
+        self.input_audio_queue.put_nowait(chunk)
 
+    # TODO(julien) Rework all this as a continuous task
     async def send_messages_to_stream_async(
         self,
         messages: AsyncGenerator[str, None],
@@ -535,10 +532,11 @@ class StreamingConversation:
             self.logger.debug("Terminating events Task")
             self.events_manager.end()
 
+        self.logger.debug("Terminating: transcriber")
+        self.transcriber.terminate()
+
         self.logger.debug("Terminating agent")
         self.agent.terminate()
-        self.logger.debug("Terminating speech transcriber")
-        self.transcriber.terminate()
 
         self.logger.debug("Terminating synthesizer event loop")
         self.synthesizer.termininate()
