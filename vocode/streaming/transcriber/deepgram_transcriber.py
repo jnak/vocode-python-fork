@@ -194,7 +194,8 @@ class DeepgramTranscriber(BaseTranscriber):
 
     async def receive_msg_from_ws(self, ws: WebSocketClientProtocol):
         self.logger.debug("Starting Deepgram transcriber receiver")
-        # TODO(julien) andles websocket disconnection gracefully
+        # TODO(julien) Handles websocket disconnection gracefully
+        # TODO(julien) Use asyncio.Queue once we established
         self.msg_deque = deque()
 
         while not self._ended:
@@ -268,11 +269,15 @@ class DeepgramTranscriber(BaseTranscriber):
 
                 if speech_final:
                     # TODO(julien) Is that ok to use the confidence of the last message only?
-                    self.on_response(Transcription(buffer, data_confidence, True))
+                    self.transcription_queue.put_nowait(
+                        Transcription(buffer, data_confidence, True)
+                    )
                     buffer = ""
                     time_silent = 0
                 elif data_top_choice["transcript"] and data_confidence > 0.0:
-                    self.on_response(Transcription(buffer, data_confidence, False))
+                    self.transcription_queue.put_nowait(
+                        Transcription(buffer, data_confidence, False)
+                    )
                     time_silent = self.calculate_time_silent(data)
                 else:
                     # TODO(julien) What's point of this? Can't we just rely on Deepgram for this?

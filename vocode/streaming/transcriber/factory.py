@@ -8,8 +8,8 @@ from vocode.streaming.transcriber.google_transcriber import GoogleTranscriber
 from vocode.streaming.transcriber.rev_ai_transcriber import RevAITranscriber
 
 
-# TODO(julien) This pattern sucks. It would much easier to have config file
-# have a default but overridable factory
+# TODO(julien) This pattern is hard to work with.
+# It would much easier to have config object itself include a default but overridable factory
 class TranscriberFactory:
     def create_transcriber(
         self,
