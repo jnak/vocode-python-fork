@@ -88,6 +88,7 @@ class GoogleSynthesizer(BaseSynthesizer):
         output_bytes_io = io.BytesIO()
         in_memory_wav = wave.open(output_bytes_io, "wb")
         in_memory_wav.setnchannels(1)
+        # This means 2 bytes = 16 bits (i.e. cd quality)
         in_memory_wav.setsampwidth(2)
         in_memory_wav.setframerate(output_sample_rate)
         in_memory_wav.writeframes(response.audio_content)

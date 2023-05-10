@@ -202,6 +202,7 @@ class StreamingConversation:
             self.logger.debug("Bot sentiment: %s", new_bot_sentiment)
             self.bot_sentiment = new_bot_sentiment
 
+    # TODO(julien) do we want to simplify that?
     async def receive_audio(self, chunk: bytes):
         await self.transcriber.send_audio(chunk)
 
@@ -217,7 +218,7 @@ class StreamingConversation:
         messages_done = threading.Event()
         speech_cut_off = threading.Event()
 
-        # This computation should be memoized
+        # TODO(julien) - this computation should be memoized
         seconds_per_chunk = TEXT_TO_SPEECH_CHUNK_SIZE_SECONDS
         chunk_size = (
             get_chunk_size_per_second(
