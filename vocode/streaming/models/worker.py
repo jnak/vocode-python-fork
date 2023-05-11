@@ -97,24 +97,13 @@ class ThreadAsyncWorker(IterruptipleWorker):
 
     _EOQ = object()
 
-    def __init__(
-        self,
-        input_queue: asyncio.Queue,
-        output_queue: asyncio.Queue,
-        blocking_task: function,
-        max_nb_of_thread=2,
-    ) -> None:
-        super().__init__(input_queue, output_queue)
-        self.max_nb_of_thread = max_nb_of_thread
-        self.blocking_task = blocking_task
-
 
     async def process(self, item, output_queue):
         output_janus_queue = janus.Queue
         thread_task = asyncio.to_thread(
             self.blocking_task, output_janus_queue.sync_q, *item
         )
-        forward_task = asyncio.create_task(self._forward_from_thead(janus_output_queue, output_queue))
+        forward_task = asyncio.create_task(self._forward_from_thead(output_janus_queue, output_queue))
         await thread_task
         output_janus_queue.async_q.put_nowait(self._EOQ)
         await forward_task
