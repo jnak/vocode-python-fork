@@ -19,11 +19,11 @@ from vocode import getenv
 from vocode.streaming.agent.base_agent import BaseAgent
 from vocode.streaming.models.agent import ChatGPTAgentConfig
 from vocode.streaming.agent.utils import stream_openai_response_async
-from vocode.streaming.models.worker import QueueWorker
+from vocode.streaming.models.worker import SimpleQueueWorker
 from vocode.streaming.transcriber.base_transcriber import Transcription
 
 
-class ChatGPTAgent(BaseAgent, QueueWorker):
+class ChatGPTAgent(BaseAgent):
     def __init__(
         self,
         agent_config: ChatGPTAgentConfig,
@@ -86,7 +86,8 @@ class ChatGPTAgent(BaseAgent, QueueWorker):
         self.logger.debug("LLM First message: %s", first_prompt)
         return self.conversation.predict(input=first_prompt)
 
-    async def process(self, transcription: Transcription):
+    async def process(self, transcription_tuple: Tuple[Transcription, asyncio.Event]):
+        (transcription, stop_event) = transcription_tuple
         self.memory.chat_memory.messages.append(
             ChatMessage(role="user", content=transcription.message)
         )
@@ -123,13 +124,19 @@ class ChatGPTAgent(BaseAgent, QueueWorker):
             stream,
             get_text=lambda choice: choice.get("delta", {}).get("content"),
         ):
+            # NOTE(julien) This is probably not good because we probably want to wait
+            # for the llm response to be played back before we honor this flag.
+            if self.agent_config.allow_agent_to_be_cut_off and stop_event.is_set():
+                return
             bot_memory_message.content = (
                 f"{bot_memory_message.content} {message}"
                 if bot_memory_message.content
                 else message
             )
             self.logger.debug("LLM Sentence: %s", message)
-            self.output_queue.put_nowait(message)
+            self.output_queue.put_nowait(
+                (message, self.agent_config.allow_agent_to_be_cut_off, stop_event)
+            )
 
     def update_last_bot_message_on_cut_off(self, message: str):
         """Get the last message from the agent and delete"""

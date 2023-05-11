@@ -219,7 +219,6 @@ class AzureSynthesizer(BaseSynthesizer):
         def chunk_generator(
             audio_data_stream: speechsdk.AudioDataStream, chunk_transform=lambda x: x
         ):
-            # NOTE(julien) I have a hunch this could be simplifed
             audio_buffer = bytes(chunk_size)
             filled_size = audio_data_stream.read_data(audio_buffer)
             if filled_size != chunk_size:
@@ -232,6 +231,7 @@ class AzureSynthesizer(BaseSynthesizer):
                     chunk_transform(audio_buffer[offset:]), False
                 )
             while True:
+                # read_data is a blocking operation
                 filled_size = audio_data_stream.read_data(audio_buffer)
                 if filled_size != chunk_size:
                     yield SynthesisResult.ChunkResult(

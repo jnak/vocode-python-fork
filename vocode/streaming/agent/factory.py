@@ -18,14 +18,19 @@ class AgentFactory:
     def create_agent(
         self,
         agent_config: AgentConfig,
-        transcription_queue: asyncio.Queue,
+        final_transcription_queue: asyncio.Queue,
         message_queue: asyncio.Queue,
         logger: Optional[logging.Logger] = None,
     ) -> BaseAgent:
         if agent_config.type == AgentType.LLM:
             return LLMAgent(agent_config=agent_config, logger=logger)
         elif agent_config.type == AgentType.CHAT_GPT:
-            return ChatGPTAgent(agent_config=agent_config, logger=logger)
+            return ChatGPTAgent(
+                agent_config=agent_config,
+                input_queue=final_transcription_queue,
+                output_queue=message_queue,
+                logger=logger,
+            )
         elif agent_config.type == AgentType.ECHO:
             return EchoAgent(agent_config=agent_config, logger=logger)
         elif agent_config.type == AgentType.INFORMATION_RETRIEVAL:

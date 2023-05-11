@@ -91,12 +91,13 @@ class StreamingConversation:
         )
         # TODO(julien) Move this logic into the synthesizer class and abstract it away
         self.synthesizer_event_loop = asyncio.new_event_loop()
-        self.synthesizer_thread = threading.Thread(
-            name="synthesizer",
-            target=create_loop_in_thread,
-            args=(self.synthesizer_event_loop,),
-        )
+        # self.synthesizer_thread = threading.Thread(
+        #     name="synthesizer",
+        #     target=create_loop_in_thread,
+        #     args=(self.synthesizer_event_loop,),
+        # )
 
+        # TODO(julien) Let's try to get this coupled for now
         self.output_audio_queue = asyncio.Queue
 
         self.events_manager = events_manager or EventsManager()
@@ -129,9 +130,21 @@ class StreamingConversation:
         self.current_filler_seconds_per_chunk: int = 0
         self.current_transcription_is_interrupt: bool = False
 
+        self.output_audio_chunk_size = self.compute_chunk_output_audio_size()
+
         if not self.agent.get_agent_config().generate_responses:
             # TODO(julien) Delete this branch
             raise NotImplementedError
+
+    def compute_chunk_output_audio_size(self):
+        seconds_per_chunk = TEXT_TO_SPEECH_CHUNK_SIZE_SECONDS
+        return (
+            get_chunk_size_per_second(
+                self.synthesizer.get_synthesizer_config().audio_encoding,
+                self.synthesizer.get_synthesizer_config().sampling_rate,
+            )
+            * seconds_per_chunk
+        )
 
     async def start(self, mark_ready: Optional[Callable[[], Awaitable[None]]] = None):
         self.synthesizer_thread.start()
@@ -205,104 +218,56 @@ class StreamingConversation:
     def receive_audio(self, chunk: bytes):
         self.input_audio_queue.put_nowait(chunk)
 
-    # TODO(julien) Rework all this as a continuous task
-    async def send_messages_to_stream_async(
-        self,
-        messages: AsyncGenerator[str, None],
-        should_allow_human_to_cut_off_bot: bool,
-        wait_for_filler_audio: bool = False,
-    ) -> Tuple[str, bool]:
-        messages_queue = queue.Queue()
-        # This is to communicate that all the message for a given llm have been said
-        # With a stream you would not neeed that
-        messages_done = threading.Event()
-        speech_cut_off = threading.Event()
+    async def handle_agent_message(self):
+        while self.active:
+            agent_response: Tuple[
+                BaseMessage, bool, asyncio.Event
+            ] = await self.agent_message_queue.get()
+            (
+                message,
+                is_interruptible,
+                stop_event,
+            ) = agent_response
+            if is_interruptible and stop_event.is_set():
+                continue
 
-        # TODO(julien) - this computation should be memoized
-        seconds_per_chunk = TEXT_TO_SPEECH_CHUNK_SIZE_SECONDS
-        chunk_size = (
-            get_chunk_size_per_second(
-                self.synthesizer.get_synthesizer_config().audio_encoding,
-                self.synthesizer.get_synthesizer_config().sampling_rate,
+            # TODO(julien) This is dangerous
+            self.is_current_synthesis_interruptable = is_interruptible
+            self.logger.debug("Synthesizing speech for message")
+
+            # self.current_synthesis_span = tracer.start_span(
+            #     SYNTHESIS_TRACE_NAME,
+            #     {"synthesizer": str(self.synthesizer.get_synthesizer_config().type)},
+            # )
+
+            # TODO(julien) This should not be awaited otherwise you can't deal
+
+            # TODODODOOD WORK ON THIS
+
+            loop = asyncio.get_event_loop()
+            synthesis_result = await loop.run_in_executor(
+                None,
+                lambda: self.synthesizer.create_speech(
+                    message, 
+                    self.output_audio_chunk_size, 
+                    bot_sentiment=self.bot_sentiment
+                )
             )
-            * seconds_per_chunk
-        )
-
-        # TODO(julien)
-        # messages_queue could be empty when it's. That's why they are using messages_done
-        # Why is this function not running all the time in a separate thread?
-        # Instead of being redefined here and taking the risk that multiple copy in parallel
-        async def send_to_call():
-            response_buffer = ""
-            cut_off = False
-            # This is set as shared value. If there are multiple async calls, there would be issue
-            self.is_current_synthesis_interruptable = should_allow_human_to_cut_off_bot
-            while True:
-                try:
-                    # This is processing one sentence at a time in a synchronous way
-                    # Which means there is no parallelization of the synthesis
-                    # Additionally,
-                    message: BaseMessage = messages_queue.get_nowait()
-                except queue.Empty:
-                    # TODO(julien) What is that for?
-                    if messages_done.is_set():
-                        break
-                    else:
-                        await asyncio.sleep(0)
-                        continue
-
-                stop_event = self.enqueue_stop_event()
-                self.logger.debug("Message sent: {}".format(message.text))
-                synthesis_result = self.synthesizer.create_speech(
-                    message, chunk_size, bot_sentiment=self.bot_sentiment
-                )
-                # This is waiting for the sppech to be played back before we generate the next sentence
-                # TODO(julien) Schedule this in a separate task that continuously pull from a queue to get its content
-                # This will probably require to move the message_sent and the cut_off to a different place
-                # This whole function should very much pull from a constant queue of messages to be synthesized and output a stream of audio to be played back
-                # The very last function of the chain only should be concern with the cut_off and the message_sent
-                # The playback step should be able to be queried for the current position in the audio
-                message_sent, cut_off = await self.send_speech_to_output(
-                    message.text,
-                    synthesis_result,
-                    stop_event,
-                    seconds_per_chunk,
-                )
-                # self.logger.debug("Message sent: {}".format(message_sent))
-                response_buffer = f"{response_buffer} {message_sent}"
-                # TODO(julien) This logic is messy
-                if cut_off:
-                    speech_cut_off.set()
-                    break
-                await asyncio.sleep(0)
+            
+            message_sent, cut_off = await loop self.send_speech_to_output(
+                message.text,
+                synthesis_result,
+                stop_event,
+                seconds_per_chunk,
+            )
+            self.logger.debug("Message sent: {}".format(message_sent))
             if cut_off:
-                self.agent.update_last_bot_message_on_cut_off(response_buffer)
+                self.agent.update_last_bot_message_on_cut_off(message_sent)
             self.transcript.add_bot_message(
-                text=response_buffer,
+                text=message_sent,
                 events_manager=self.events_manager,
                 conversation_id=self.id,
             )
-            return response_buffer, cut_off
-
-        # Schedule a message to be synthesized and sent on the synthesizer thread
-        asyncio.run_coroutine_threadsafe(send_to_call(), self.synthesizer_event_loop)
-
-        messages_generated = 0
-        async for message in messages:
-            messages_generated += 1
-            if messages_generated == 1:
-                if wait_for_filler_audio:
-                    self.interrupt_all_synthesis()
-                    self.wait_for_filler_audio_to_finish()
-            if speech_cut_off.is_set():
-                break
-            messages_queue.put_nowait(BaseMessage(text=message))
-            await asyncio.sleep(0)
-        if messages_generated == 0:
-            self.logger.debug("Agent generated no messages")
-            if wait_for_filler_audio:
-                self.interrupt_all_synthesis()
-        messages_done.set()
 
     def warmup_synthesizer(self):
         self.synthesizer.ready_synthesizer()
@@ -432,7 +397,8 @@ class StreamingConversation:
             #         self.logger.debug("No filler audio available for synthesizer")
             # self.logger.debug("Generating response for transcription")
 
-            self.final_transcription_queue.put_nowait(transcription)
+            stop_event = self.enqueue_stop_event()
+            self.final_transcription_queue.put_nowait((transcription, stop_event))
 
             # if goodbye_detected_task:
             #     try:
@@ -466,6 +432,8 @@ class StreamingConversation:
                 break
         return num_interrupts > 0
 
+    # NOTE(julien) The fact this function can be called from anywhere introduce
+    # potential concurrency issues because is_current_synthesis_interruptable is set
     async def send_filler_audio_to_output(
         self,
         filler_audio: FillerAudio,

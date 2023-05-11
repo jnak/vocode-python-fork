@@ -15,12 +15,12 @@ class BaseAgent(SimpleQueueWorker):
     def __init__(
         self,
         agent_config: AgentConfig,
-        transcription_queue: asyncio.Queue[Transcription],
+        final_transcription_queue: asyncio.Queue[Transcription],
         # TODO(julien) We probably want to do this
-        message_queue: asyncio.Queue[str],
+        agent_message_queue: asyncio.Queue[str],
     ):
         self.agent_config = agent_config
-        super().__init__(transcription_queue, message_queue)
+        super().__init__(final_transcription_queue, agent_message_queue)
 
     # TODO(julien) This is only used by StreamingConversation. It feels like the conversation should keep a reference around...
     def get_agent_config(self) -> AgentConfig:
