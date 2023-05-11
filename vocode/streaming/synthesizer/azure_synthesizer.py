@@ -216,7 +216,7 @@ class AzureSynthesizer(BaseSynthesizer):
         offset = 0
         self.logger.debug(f"Synthesizing message: {message}")
 
-        def chunk_generator(
+        async def chunk_generator(
             audio_data_stream: speechsdk.AudioDataStream, chunk_transform=lambda x: x
         ):
             audio_buffer = bytes(chunk_size)

@@ -1,4 +1,6 @@
 import asyncio
+import threading
+import janus
 
 
 class AsyncWorker:
@@ -20,6 +22,96 @@ class AsyncWorker:
             return self.worker_task.cancel()
 
         return False
+
+
+class ContinousThreadWorker(AsyncWorker):
+    """
+    This is just for the playback currently
+    """
+
+    def __init__(
+        self,
+        input_queue: asyncio.Queue,
+        output_queue: asyncio.Queue,
+        blocking_work: function,
+    ) -> None:
+        super().__init__(input_queue, output_queue)
+        self.blocking_work = blocking_work
+
+        self.input_janus_queue = janus.Queue
+        self.output_janus_queue = janus.Queue
+        self.input_task: None | asyncio.Task = None
+        self.output_task: None | asyncio.Task = None
+        self.stop_event = threading.Event()
+
+    def start(self) -> asyncio.Task:
+        self.forward_input_task = asyncio.create_task(self.forward_input())
+        self.forward_output_task = asyncio.create_task(self.forward_output())
+        self.worker_task = asyncio.to_thread(
+            self.blocking_work,
+            self.input_janus_queue.sync_q,
+            self.output_janus_queue.sync_q,
+            self.stop_event,
+        )
+
+    async def terminate(self):
+        self.stop_event.set()
+        self.forward_input_task.cancel()
+        self.forward_output_task.cancel()
+        await asyncio.gather(
+            self.worker_task,
+            self.forward_input_task,
+            self.forward_output_task,
+        )
+
+    async def forward_input(self):
+        try:
+            while True:
+                item = await self.input_queue.get()
+                self.input_janus_queue.async_q.put_nowait(item)
+        except asyncio.TimeoutError:
+            pass
+
+    async def forward_output(self):
+        try:
+            while True:
+                item = await self.output_queue.get()
+                self.output_janus_queue.async_q.put_nowait(item)
+        except asyncio.TimeoutError:
+            pass
+
+
+class ThreadAsyncWorker(AsyncWorker):
+    """
+    This would be the synthesizer
+    """
+
+    def __init__(
+        self,
+        input_queue: asyncio.Queue,
+        output_queue: asyncio.Queue,
+        blocking_task: function,
+        max_nb_of_thread=2,
+    ) -> None:
+        super().__init__(input_queue, output_queue)
+        self.max_nb_of_thread = max_nb_of_thread
+        self.blocking_task = blocking_task
+        self.output_janus_queue = janus.Queue
+
+    def start(self) -> asyncio.Task:
+        self.current_task = asyncio.create_task(self.run_loop())
+
+    async def run_loop(self):
+        # TODO(julien) Implement concurrency
+        while True:
+            item = await self.input_queue.get()
+            self.current_task = asyncio.to_thread(
+                self.blocking_task, self.output_janus_queue.sync_q, *item
+            )
+            try:
+                item = await self.current_task
+            except asyncio.CancelledError:
+                pass
 
 
 class SimpleQueueWorker(AsyncWorker):
