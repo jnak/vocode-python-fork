@@ -23,21 +23,42 @@ class Transcription:
         return f"Transcription({self.message}, {self.confidence}, {self.is_final})"
 
 
-class BaseTranscriber(AsyncWorker):
+# class BaseTranscriber(AsyncWorker):
+#     def __init__(
+#         self,
+#         transcriber_config: TranscriberConfig,
+#         # TODO(julien) Should we make this an audio queue?
+#         # In that case, we would need 2 worker tasks...
+#         audio_queue: asyncio.Queue[bytes],
+#         # TODO(julien) We probably want to do this
+#         transcription_queue: asyncio.Queue[Transcription],
+#     ):
+#         super().__init__(audio_queue, transcription_queue)
+#         self.transcriber_config = transcriber_config
+#         self.audio_queue = audio_queue
+#         self.transcription_queue = transcription_queue
+
+#     # TODO(julien) This is probably un-necessary
+#     def get_transcriber_config(self) -> TranscriberConfig:
+#         return self.transcriber_config
+
+
+class BaseTranscriber:
+    WORKER = AsyncWorker()
+
     def __init__(
         self,
         transcriber_config: TranscriberConfig,
-        # TODO(julien) Should we make this an audio queue?
-        # In that case, we would need 2 worker tasks...
-        audio_queue: asyncio.Queue[bytes],
-        # TODO(julien) We probably want to do this
-        transcription_queue: asyncio.Queue[Transcription],
     ):
         super().__init__(audio_queue, transcription_queue)
         self.transcriber_config = transcriber_config
-        self.audio_queue = audio_queue
-        self.transcription_queue = transcription_queue
 
     # TODO(julien) This is probably un-necessary
     def get_transcriber_config(self) -> TranscriberConfig:
         return self.transcriber_config
+    
+    def worker(...,transcriber=...):
+        self.WORKER(
+            ...
+            process=self.send_audio,
+        )
