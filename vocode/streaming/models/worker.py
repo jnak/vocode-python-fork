@@ -6,14 +6,19 @@ import inspect
 
 
 class AsyncWorker:
-    def __init__(self, input_queue: asyncio.Queue, output_queue: asyncio.Queue, run_loop=None) -> None:
+    _TASK_NAME = '_run_loop'
+
+    def __init__(self, input_queue: asyncio.Queue, output_queue: asyncio.Queue) -> None:
         self.worker_task: None | asyncio.Task = None
         self.input_queue = input_queue
         self.output_queue = output_queue
-        if run_loop:
-            if not inspect.iscoroutinefunction(run_loop):
-                raise TypeError('Should be an async function')
-            self._run_loop = run_loop
+
+    def set_task(self, instance):
+        task_func = instance.worker_task if hasattr(instance, 'WORKER_TASK') else instance
+        if not inspect.iscoroutinefunction(task_func):
+            raise TypeError('Should be an async function')
+        setattr(self, self._TASK_NAME, task_func)
+        return self
 
     def start(self) -> asyncio.Task:
         self.worker_task = asyncio.create_task(self._run_loop(self.input_queue, self.output_queue))
@@ -52,20 +57,22 @@ class InterruptibleEvent:
 
 
 class IterruptipleWorker(AsyncWorker):
+    _TASK_NAME = '_process_item'
+
     def __init__(
         self,
         input_queue: asyncio.Queue,
         output_queue: asyncio.Queue,
         max_concurrency=2,
-        process_item=None,
     ) -> None:
         super().__init__(input_queue, output_queue)
         self.max_concurrency = max_concurrency
         self.task_queue = collections.deque()
-        if process_item:
-            if not inspect.iscoroutinefunction(process_item):
-                raise TypeError('Should be an async function')
-            self.process_item = process_item
+
+    def set_task(process_item):
+        if not inspect.iscoroutinefunction(process_item):
+            raise TypeError('Should be an async function')
+        self.process_item = process_item
 
     async def _run_loop(self):
         # TODO(julien) Implement concurrency with max_nb_of_thread
@@ -75,21 +82,22 @@ class IterruptipleWorker(AsyncWorker):
                 if isinstance(item, InterruptibleEvent) and item.is_interrupted():
                     continue
         # TODO (julien) Finishi this
+            self._run_task ...
         except Exception:
             pass
 
-    async def run_task(self, item):
+    async def _run_task(self, item):
         # TODO(julien) Finish this
         interuptible_event = item
         self.current_task = asyncio.create_task(
-            self.process(item, self.output_queue)
+            self.process_item(item, self.output_queue)
         )
         await self.current_task
         self.current_task = None
         except asyncio.CancelledError:
             pass
 
-    async def process(self, item, output_queue):
+    async def _process_item(self, item, output_queue):
         """
         Publish results onto output queue.
         Calls to async function / task should be able to handle asyncio.CancelledError gracefully:
@@ -138,70 +146,41 @@ class ThreadAsync:
     def blocking_task(self, output_queue, *args):
         raise NotImplementedError
 
-
-    
-    
-
-class SynthesizerAsyncWorker(IterruptipleWorker):
-    synthesizer = MySynth(...)
-
-    def __init__(
-        self,
-        synthesizer_config: PlayHtSynthesizerConfig,
-        api_key: str = None,
-        user_id: str = None,
-        logger: Optional[logging.Logger] = None,
-    ):
-        return  
-
-    def process(self, item):
-        synthesizer = self.synthesizer()
-        return self.synthesizr.
-
-
-class MySynthesizer(...):
-    worker = SynthesizerAsyncWorker
-
-    async def process(item, output_queue):
-        return self.synthesizer(
-            self=self.
-        )
-
-
-MySynthesizer.worker(
-    ..., 
-    synthesizer=MySynthesizer(
-       ...
-    ),
-)
-
+"""
+Here is an example of how that would work
 
 class BaseSynth:
-    WORKER = None
-
-    def __init__(...)
-        if not self.WORKER:
-            raise NotImplementedError
-    
-    
-    def worker(..., synthesizer=...):
-        self.WORKER(
-            ...
-            process=synthesizer.create_speech
-        )
+    Worker = None
+    WORKER_TASK = 'create_speech'
 
 
-MySynthesizer
-  ...
-  worker=dict(
-    ...
-  )
+class MySynth(BaseSynth):
+    Worker = IterruptipleWorker
+
+    def create_speech(item, output_queue):
+        ...
+
+MySynthesizer.Worker(
+    ..., 
+).set_task(
+    MySynthesizer(
+       ...
+    )
 )
 
+class BaseTranscriber:
+    Worker = AsyncWorker()
+    WORKER_TASK = 'run_loop'
 
-def factory(config)
-    if config...
-        return SynthesizerAsyncWorker(...)
+class MyTranscriber(BaseTranscriber):
 
+    def run_loop(self, input_queue, output_queue):
+        ...
 
-# output_audio_chunk_size
+MyTranscriber.Worker(
+    ...
+).set_task(
+   MyTranscriber(...)
+)
+
+"""
