@@ -1,7 +1,7 @@
-from typing import Callable, Optional, Awaitable
+import asyncio
 
-from vocode.streaming.utils import convert_wav
-from vocode.streaming.models.transcriber import EndpointingConfig, TranscriberConfig
+from vocode.streaming.models.transcriber import TranscriberConfig
+from vocode.streaming.utils.worker import AsyncWorker
 
 
 class Transcription:
@@ -21,28 +21,30 @@ class Transcription:
         return f"Transcription({self.message}, {self.confidence}, {self.is_final})"
 
 
-class BaseTranscriber:
+class BaseTranscriber(AsyncWorker):
     def __init__(
         self,
         transcriber_config: TranscriberConfig,
     ):
+        self.input_queue: asyncio.Queue[bytes] = asyncio.Queue()
+        self.output_queue: asyncio.Queue[Transcription] = asyncio.Queue()
+        super().__init__(self.input_queue, self.output_queue)
         self.transcriber_config = transcriber_config
-        self.on_response: Optional[Callable[[Transcription], Awaitable]] = None
 
     def get_transcriber_config(self) -> TranscriberConfig:
         return self.transcriber_config
 
-    def set_on_response(self, on_response: Callable[[Transcription], Awaitable]):
-        self.on_response = on_response
-
     async def ready(self):
         return True
+
+    async def _run_loop(self):
+        await self.run()
 
     async def run(self):
         pass
 
     def send_audio(self, chunk):
-        pass
+        self.send_nonblocking(chunk)
 
     def terminate(self):
-        pass
+        super().terminate()

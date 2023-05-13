@@ -1,5 +1,5 @@
 import os
-from typing import Any, Generator, Callable, List, Optional
+from typing import Any, AsyncGenerator, Generator, Callable, List, Optional
 import math
 import io
 import wave
@@ -47,7 +47,8 @@ class SynthesisResult:
 
     def __init__(
         self,
-        chunk_generator: Generator[ChunkResult, None, None],
+        # TODO(ajay): this needs to be AsyncGenerator
+        chunk_generator: AsyncGenerator[ChunkResult, None],
         get_message_up_to: Callable[[int], str],
     ):
         self.chunk_generator = chunk_generator
@@ -123,13 +124,13 @@ class BaseSynthesizer:
             seconds_per_chunk=2,
         )
 
-    def set_filler_audios(self, filler_audio_config: FillerAudioConfig):
+    async def set_filler_audios(self, filler_audio_config: FillerAudioConfig):
         if filler_audio_config.use_phrases:
-            self.filler_audios = self.get_phrase_filler_audios()
+            self.filler_audios = await self.get_phrase_filler_audios()
         elif filler_audio_config.use_typing_noise:
             self.filler_audios = [self.get_typing_noise_filler_audio()]
 
-    def get_phrase_filler_audios(self) -> List[FillerAudio]:
+    async def get_phrase_filler_audios(self) -> List[FillerAudio]:
         return []
 
     def ready_synthesizer(self):
