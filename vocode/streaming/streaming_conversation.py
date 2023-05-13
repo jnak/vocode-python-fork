@@ -113,8 +113,6 @@ class StreamingConversation:
             conversation: "StreamingConversation",
         ):
             super().__init__(input_queue, output_queue)
-            self.input_queue = input_queue
-            self.output_queue = output_queue
             self.conversation = conversation
 
         async def process(self, item: InterruptibleEvent[Transcription]):
@@ -153,6 +151,7 @@ class StreamingConversation:
             #             "No filler audio available for synthesizer"
             #         )
             self.conversation.logger.debug("Generating response for transcription")
+
             if self.conversation.agent.get_agent_config().generate_responses:
                 responses = self.conversation.agent.generate_response(
                     transcription.message,
@@ -451,6 +450,7 @@ class StreamingConversation:
 
     def broadcast_interrupt(self):
         """Returns true if any events were interrupted"""
+        self.logger.debug("SynthesisResultsWorker: broadcast_interrupt")
         num_interrupts = 0
         while True:
             try:
@@ -461,6 +461,12 @@ class StreamingConversation:
                         num_interrupts += 1
             except queue.Empty:
                 break
+        # TODO(julien/ajay) Currently, the message cut off logic won't run if we cancel
+        # We should probably add it for consistency
+        # self.synthesis_results_worker.cancel_current_task()
+        self.agent_responses_worker.cancel_current_task()
+        self.final_transcriptions_worker.cancel_current_task()
+
         return num_interrupts > 0
 
     # returns an estimate of what was sent up to, and a flag if the message was cut off

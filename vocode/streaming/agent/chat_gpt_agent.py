@@ -100,34 +100,39 @@ class ChatGPTAgent(ChatAgent):
         is_interrupt: bool = False,
         conversation_id: Optional[str] = None,
     ) -> AsyncGenerator[str, None]:
-        self.memory.chat_memory.messages.append(
-            ChatMessage(role="user", content=human_input)
-        )
-        if is_interrupt and self.agent_config.cut_off_response:
-            cut_off_response = self.get_cut_off_response()
+        try:
+            self.logger.debug("Human final transcription: %s", human_input)
             self.memory.chat_memory.messages.append(
-                ChatMessage(role="assistant", content=cut_off_response)
+                ChatMessage(role="user", content=human_input)
             )
-            yield cut_off_response
-            return
-        prompt_messages = [
-            ChatMessage(role="system", content=self.agent_config.prompt_preamble)
-        ] + self.memory.chat_memory.messages
-        bot_memory_message = ChatMessage(role="assistant", content="")
-        self.memory.chat_memory.messages.append(bot_memory_message)
-        stream = await openai.ChatCompletion.acreate(
-            model=self.agent_config.model_name,
-            messages=[
-                prompt_message.dict(include={"content": True, "role": True})
-                for prompt_message in prompt_messages
-            ],
-            max_tokens=self.agent_config.max_tokens,
-            temperature=self.agent_config.temperature,
-            stream=True,
-        )
-        async for message in stream_openai_response_async(
-            stream,
-            get_text=lambda choice: choice.get("delta", {}).get("content"),
-        ):
-            bot_memory_message.content = f"{bot_memory_message.content} {message}"
-            yield message
+            if is_interrupt and self.agent_config.cut_off_response:
+                cut_off_response = self.get_cut_off_response()
+                self.memory.chat_memory.messages.append(
+                    ChatMessage(role="assistant", content=cut_off_response)
+                )
+                yield cut_off_response
+                return
+            prompt_messages = [
+                ChatMessage(role="system", content=self.agent_config.prompt_preamble)
+            ] + self.memory.chat_memory.messages
+            bot_memory_message = ChatMessage(role="assistant", content="")
+            self.memory.chat_memory.messages.append(bot_memory_message)
+            stream = await openai.ChatCompletion.acreate(
+                model=self.agent_config.model_name,
+                messages=[
+                    prompt_message.dict(include={"content": True, "role": True})
+                    for prompt_message in prompt_messages
+                ],
+                max_tokens=self.agent_config.max_tokens,
+                temperature=self.agent_config.temperature,
+                stream=True,
+            )
+            async for message in stream_openai_response_async(
+                stream,
+                get_text=lambda choice: choice.get("delta", {}).get("content"),
+            ):
+                bot_memory_message.content = f"{bot_memory_message.content} {message}"
+                self.logger.debug("New LLM sentence: %s", message)
+                yield message
+        except Exception:
+            self.logger.exception("LLM Exception")
