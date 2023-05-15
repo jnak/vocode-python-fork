@@ -17,12 +17,9 @@ class AsyncWorker:
         self.worker_task: None | asyncio.Task = None
         self.input_queue = input_queue
         self.output_queue = output_queue
-        # necessary because _run_loop may swallow asyncio.CancelledError
-        self.active = False
 
     def start(self) -> asyncio.Task:
         self.worker_task = asyncio.create_task(self._run_loop())
-        self.active = True
         return self.worker_task
 
     def send_nonblocking(self, item):
@@ -32,7 +29,6 @@ class AsyncWorker:
         raise NotImplementedError
 
     def terminate(self):
-        self.active = False
         if self.worker_task:
             return self.worker_task.cancel()
 
@@ -41,19 +37,21 @@ class AsyncWorker:
 
 class AsyncQueueWorker(AsyncWorker):
     async def _run_loop(self):
-        while self.active:
+        while True:
             try:
                 item = await self.input_queue.get()
                 await self.process(item)
             except asyncio.CancelledError:
-                break
+                """Process should handle gracefully asyncio.CancelledError but not re-raise them."""
+                return
             except Exception as e:
                 logger.exception("AsyncQueueWorker", exc_info=True)
 
     async def process(self, item):
         """
         Publish results onto output queue.
-        Calls to async function / task should be able to handle asyncio.CancelledError gracefully:
+        Calls to async function / task should be able to handle asyncio.CancelledError gracefully 
+        but not re-raise it.
         """
         raise NotImplementedError
 
@@ -99,7 +97,7 @@ class InterruptibleWorker(AsyncWorker):
 
     async def _run_loop(self):
         # TODO Implement concurrency with max_nb_of_thread
-        while self.active:
+        while True:
             item = await self.input_queue.get()
             if item.is_interrupted():
                 continue
@@ -108,7 +106,7 @@ class InterruptibleWorker(AsyncWorker):
             try:
                 await self.current_task
             except asyncio.CancelledError:
-                pass
+                return
             except Exception as e:
                 logger.exception("InterruptibleWorker", exc_info=True)
             self.interruptible_event.is_interruptible = False
@@ -141,9 +139,9 @@ class InterruptibleWorker(AsyncWorker):
 #     """
 #     This would be the synthesizer
 #     """
-
+#
 #     _EOQ = object()
-
+#
 #     def __init__(
 #         self,
 #         input_queue: asyncio.Queue,
@@ -154,8 +152,9 @@ class InterruptibleWorker(AsyncWorker):
 #         super().__init__(input_queue, output_queue)
 #         self.max_nb_of_thread = max_nb_of_thread
 #         self.blocking_task = blocking_task
-
+#
 #     async def process(self, item):
+#         TODO Handle asyncio.CancelledError gracefully
 #         output_janus_queue = janus.Queue()
 #         thread_task = asyncio.to_thread(
 #             self.blocking_task, output_janus_queue.sync_q, *item
@@ -166,7 +165,7 @@ class InterruptibleWorker(AsyncWorker):
 #         await thread_task
 #         output_janus_queue.async_q.put_nowait(self._EOQ)
 #         await forward_task
-
+#
 #     async def _forward_from_thead(
 #         self, output_janus_queue: janus.Queue, output_queue: asyncio.Queue
 #     ):
@@ -175,6 +174,6 @@ class InterruptibleWorker(AsyncWorker):
 #             if self._EOQ:
 #                 return
 #             output_queue.put_nowait(thread_item)
-
+#
 #     def blocking_task(self, output_queue, *args):
 #         raise NotImplementedError
